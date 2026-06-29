@@ -1035,8 +1035,7 @@ input:focus-visible {
   font-weight: 600;
 }
 
-.attention-inbox-meta,
-.attention-inbox-more {
+.attention-inbox-meta {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1045,8 +1044,15 @@ input:focus-visible {
   font-size: 10.5px;
 }
 
-.attention-inbox-more {
-  padding: 4px 7px 6px 76px;
+/* Group indicator in the attention inbox meta line: a small coloured dot keyed
+   to the session's user-group colour, preceding the group name. */
+.attention-inbox-group-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  margin-right: 4px;
+  vertical-align: baseline;
 }
 
 .project-group {
@@ -2445,7 +2451,7 @@ input:focus-visible {
 /* Inside a group region the region header is itself sticky at top:0, so tuck the
    card header just beneath it rather than letting them overlap. */
 .grid-region .grid-card-header {
-  top: 30px;
+  top: 40px;
 }
 
 .grid-card-dot {
@@ -5667,6 +5673,39 @@ body.sidebar-session-dragging * {
 .group-editor-swatch.selected {
   border-color: #ffffff;
   box-shadow: 0 0 0 2px rgba(0,0,0,0.4);
+}
+
+/* Custom colour picker swatch: rainbow "pick" affordance wrapping a hidden
+   native colour input. Set inline background overrides the gradient once a
+   custom colour is chosen. */
+.group-editor-swatch-custom {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: conic-gradient(from 0deg, #e05070, #f0a050, #e0c050, #3ecf5a, #50c0a0, #4fc3f7, #8088ff, #c0a0ff, #e05070);
+}
+.group-editor-swatch-custom::after {
+  content: '+';
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+  pointer-events: none;
+}
+.group-editor-swatch-custom.selected::after { content: ''; }
+.group-editor-color-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: none;
+  opacity: 0;
+  cursor: pointer;
 }
 
 /* --- Group assignment / menu popover --- */

@@ -309,7 +309,7 @@ function buildAttentionInbox(projects) {
   const list = document.createElement('div');
   list.className = 'attention-inbox-list';
 
-  for (const { session, status } of items.slice(0, 8)) {
+  for (const { session, status } of items) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = `attention-inbox-item ${status.className}`;
@@ -318,19 +318,18 @@ function buildAttentionInbox(projects) {
     const displayName = cleanDisplayName(session.name || session.aiTitle || session.summary) || session.sessionId;
     const modified = lastActivityTime.get(session.sessionId) || new Date(session.modified);
     const timeStr = formatDate(modified);
+    const group = (typeof getGroupForSession === 'function' && typeof groupsState !== 'undefined')
+      ? getGroupForSession(groupsState, session.sessionId)
+      : null;
+    const groupChip = group
+      ? `<span class="attention-inbox-group-dot" style="background:${escapeHtml(group.color)}"></span>${escapeHtml(group.name)} · `
+      : '';
     button.innerHTML = `
       <span class="attention-inbox-status">${escapeHtml(status.label)}</span>
       <span class="attention-inbox-title">${escapeHtml(displayName)}</span>
-      <span class="attention-inbox-meta">${escapeHtml(getSessionProjectLabel(session))} · ${escapeHtml(timeStr)}</span>
+      <span class="attention-inbox-meta">${groupChip}${escapeHtml(getSessionProjectLabel(session))} · ${escapeHtml(timeStr)}</span>
     `;
     list.appendChild(button);
-  }
-
-  if (items.length > 8) {
-    const more = document.createElement('div');
-    more.className = 'attention-inbox-more';
-    more.textContent = `+ ${items.length - 8} more in project list`;
-    list.appendChild(more);
   }
 
   section.appendChild(list);
@@ -560,7 +559,12 @@ function filterSidebarSessions(sessions) {
     filtered = filtered.filter(s => !s.archived);
   }
   if (showStarredOnly) filtered = filtered.filter(s => s.starred);
-  if (showRunningOnly) filtered = filtered.filter(s => activePtyIds.has(s.sessionId));
+  // "Running" must match the definition used everywhere else in the sidebar
+  // (sort priority, status dots, slug/group rollups): a session counts as running
+  // if its PTY is tracked OR it's a just-spawned pending session whose PTY hasn't
+  // been polled into activePtyIds yet. Without the pendingSessions check, a brand-new
+  // session is filtered out until an unrelated re-render (e.g. toggling the filter).
+  if (showRunningOnly) filtered = filtered.filter(s => activePtyIds.has(s.sessionId) || pendingSessions.has(s.sessionId));
   if (showTodayOnly) {
     const now = new Date();
     const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -1763,10 +1767,12 @@ function showGroupEditorDialog({ title = 'New Group', name = '', color = '' } = 
 
     function renderSwatches() {
       swatchesEl.innerHTML = '';
+      const selectedLc = (selectedColor || '').toLowerCase();
+      const inPalette = palette.some(c => c.toLowerCase() === selectedLc);
       for (const swatchColor of palette) {
         const swatch = document.createElement('button');
         swatch.type = 'button';
-        swatch.className = 'group-editor-swatch' + (swatchColor === selectedColor ? ' selected' : '');
+        swatch.className = 'group-editor-swatch' + (swatchColor.toLowerCase() === selectedLc ? ' selected' : '');
         swatch.style.background = swatchColor;
         swatch.title = swatchColor;
         swatch.setAttribute('aria-label', `Color ${swatchColor}`);
@@ -1776,6 +1782,31 @@ function showGroupEditorDialog({ title = 'New Group', name = '', color = '' } = 
         });
         swatchesEl.appendChild(swatch);
       }
+
+      // Custom colour: a native OS colour input styled as a swatch. When the active
+      // colour isn't one of the presets, this swatch is "selected" and filled with it.
+      const custom = document.createElement('label');
+      custom.className = 'group-editor-swatch group-editor-swatch-custom' + (!inPalette ? ' selected' : '');
+      custom.title = 'Custom color';
+      custom.setAttribute('aria-label', 'Choose a custom color');
+      if (!inPalette) custom.style.background = selectedColor;
+
+      const picker = document.createElement('input');
+      picker.type = 'color';
+      picker.className = 'group-editor-color-input';
+      // The native input only accepts #rrggbb; seed it with the current colour or a default.
+      picker.value = /^#[0-9a-f]{6}$/i.test(selectedColor) ? selectedColor : palette[0];
+      // Update on `input` (fires live while dragging) but mutate the DOM directly
+      // instead of re-rendering — a re-render would recreate the input and close the
+      // OS picker mid-interaction.
+      picker.addEventListener('input', () => {
+        selectedColor = picker.value;
+        swatchesEl.querySelectorAll('.group-editor-swatch').forEach(el => el.classList.remove('selected'));
+        custom.classList.add('selected');
+        custom.style.background = selectedColor;
+      });
+      custom.appendChild(picker);
+      swatchesEl.appendChild(custom);
     }
     renderSwatches();
 

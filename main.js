@@ -1674,9 +1674,17 @@ function startProjectsWatcher() {
 
   const pendingFolders = new Set();
   let debounceTimer = null;
+  let firstPendingAt = 0;
+  // Coalesce bursts of fs events (500ms quiet window) but never wait longer than
+  // MAX_WAIT total — otherwise a continuously-streaming session keeps resetting the
+  // timer and the renderer is starved of updates (e.g. the AI-generated title never
+  // refreshes in the sidebar until the session falls quiet).
+  const QUIET_MS = 500;
+  const MAX_WAIT_MS = 2000;
 
   function flushChanges() {
     debounceTimer = null;
+    firstPendingAt = 0;
     const folders = new Set(pendingFolders);
     pendingFolders.clear();
 
@@ -1716,8 +1724,11 @@ function startProjectsWatcher() {
         return;
       }
 
+      const now = Date.now();
+      if (!firstPendingAt) firstPendingAt = now;
+      const wait = Math.min(QUIET_MS, Math.max(0, MAX_WAIT_MS - (now - firstPendingAt)));
       if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(flushChanges, 500);
+      debounceTimer = setTimeout(flushChanges, wait);
     });
 
     projectsWatcher.on('error', (err) => {
