@@ -120,17 +120,36 @@ function transformUsageResponse(apiUsage) {
 
 async function fetchUsage() {
   const oauth = getOAuthToken();
-  if (!oauth?.accessToken) return null;
+  if (!oauth?.accessToken) {
+    return { _error: true, message: 'Not signed in to Claude Code (no OAuth token found)' };
+  }
 
-  const res = await fetch('https://api.anthropic.com/api/oauth/usage', {
-    headers: {
-      'Authorization': `Bearer ${oauth.accessToken}`,
-      'Content-Type': 'application/json',
-      'User-Agent': 'claude-code/2.1.74',
-      'anthropic-beta': 'oauth-2025-04-20',
-    },
-    signal: AbortSignal.timeout(10000),
-  });
+  // The stored token can't be refreshed from here (only Claude Code itself
+  // refreshes it), so surface an expired token clearly instead of firing off a
+  // request that's guaranteed to 401.
+  if (oauth.expiresAt) {
+    const exp = Number(oauth.expiresAt);
+    const expMs = exp > 1e12 ? exp : exp * 1000;
+    if (Number.isFinite(expMs) && expMs < Date.now()) {
+      return { _error: true, message: 'Claude Code token expired — open Claude Code to refresh it' };
+    }
+  }
+
+  let res;
+  try {
+    res = await fetch('https://api.anthropic.com/api/oauth/usage', {
+      headers: {
+        'Authorization': `Bearer ${oauth.accessToken}`,
+        'Content-Type': 'application/json',
+        'User-Agent': 'claude-code/2.1.74',
+        'anthropic-beta': 'oauth-2025-04-20',
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+  } catch (err) {
+    const reason = err?.name === 'TimeoutError' ? 'request timed out' : (err?.message || 'network error');
+    return { _error: true, message: `Usage request failed: ${reason}` };
+  }
 
   if (res.status === 429) {
     const retryAfter = parseInt(res.headers.get('retry-after') || '0', 10);
@@ -139,7 +158,10 @@ async function fetchUsage() {
 
   if (!res.ok) {
     console.error('[claude-auth] Usage API error:', res.status, res.statusText);
-    return null;
+    const hint = (res.status === 401 || res.status === 403)
+      ? ' (token expired or invalid — re-auth in Claude Code)'
+      : '';
+    return { _error: true, message: `Usage API error ${res.status}${hint}` };
   }
   return await res.json();
 }
@@ -147,10 +169,13 @@ async function fetchUsage() {
 async function fetchAndTransformUsage() {
   try {
     const raw = await fetchUsage();
-    if (raw === null) {
-      return { _error: true, message: 'Could not fetch usage (no token or API error)' };
+    if (!raw) {
+      return { _error: true, message: 'Could not fetch Claude usage data.' };
     }
-    if (raw?._rateLimited) {
+    if (raw._error) {
+      return { _error: true, message: raw.message };
+    }
+    if (raw._rateLimited) {
       return { _rateLimited: true, retryAfterSeconds: raw.retryAfterSeconds };
     }
     return transformUsageResponse(raw);
