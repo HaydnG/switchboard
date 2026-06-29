@@ -1236,7 +1236,13 @@ function focusGridCard(sessionId, { reveal = true } = {}) {
       if (region) toggleGridRegionCollapse(region);
     }
     card.classList.add('focused');
-    card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    // Align the focused card to the top of the grid viewport (block:'start')
+    // rather than 'nearest' so an explicit selection always pulls the session up
+    // to the top instead of leaving it wherever it happened to sit. The scroll
+    // container's scroll-padding-top keeps it clear of the sticky region/card
+    // headers. A passive end-of-render focus (reveal:false) keeps 'nearest' to
+    // avoid yanking the view around on every re-render.
+    card.scrollIntoView({ behavior: 'smooth', block: reveal ? 'start' : 'nearest' });
   }
   const entry = openSessions.get(sessionId);
   if (entry) entry.terminal.focus();

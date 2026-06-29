@@ -2578,6 +2578,16 @@ input:focus-visible {
   overscroll-behavior: contain;
   align-content: start;
   grid-auto-rows: minmax(460px, min(58vh, 620px));
+  /* scrollIntoView({block:'start'}) on a focused card aligns the card top to the
+     scroll-padding edge; keep it just clear of the sticky card header (top:-14px)
+     so the header isn't tucked under the container's top padding. */
+  scroll-padding-top: 14px;
+}
+
+/* When grouped, each region header is sticky at top:0 (~40px tall) with the card
+   header beneath it, so push the snap point down to clear the region header. */
+#terminals.grid-layout.grid-grouped {
+  scroll-padding-top: 48px;
 }
 
 #terminals.grid-layout.grid-few-cards {
@@ -2621,8 +2631,20 @@ input:focus-visible {
   box-shadow: 0 2px 12px rgba(0,0,0,0.3);
 }
 
-.grid-card.focused {
-  border-color: rgba(128,136,255,0.5);
+/* Focused card chrome: brighten the header and title so the active session reads
+   clearly even at a glance. The border/glow that makes the tile pop lives in a
+   later block so it wins over the status/health border + shadow rules below. */
+.grid-card.focused .grid-card-header {
+  background: #232539;
+  border-bottom-color: rgba(128,136,255,0.35);
+}
+
+.grid-card.focused .grid-card-name {
+  color: #eaeaf7;
+}
+
+.grid-card.focused .grid-card-dot.stopped {
+  background: #8c8cb0;
 }
 
 .grid-card-header:focus-visible,
@@ -2651,6 +2673,21 @@ input:focus-visible {
 
 .grid-card.health-handoff-recommended {
   box-shadow: inset 0 0 0 1px rgba(224,80,112,0.2);
+}
+
+/* The focused tile must be unmistakable, so its accent border + glow override the
+   status/health border/shadow rules above (declared after them to win the
+   cascade). Listing the status/health combinations explicitly keeps the win even
+   as those rules evolve. */
+.grid-card.focused,
+.grid-card.focused.status-needs-attention,
+.grid-card.focused.status-response-ready,
+.grid-card.focused.health-marathon-risk,
+.grid-card.focused.health-handoff-recommended {
+  border-color: rgba(140,148,255,0.95);
+  box-shadow:
+    0 0 0 1px rgba(140,148,255,0.7),
+    0 8px 26px rgba(110,118,240,0.32);
 }
 
 @media (prefers-reduced-motion: reduce) {
