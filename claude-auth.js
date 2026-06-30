@@ -2,6 +2,7 @@
 // macOS: Keychain (primary) → ~/.claude/.credentials.json (fallback)
 // Linux/Windows: ~/.claude/.credentials.json only
 
+const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -11,32 +12,41 @@ function getConfigDir() {
   return (process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'));
 }
 
-function getKeychainServiceName() {
+function getKeychainServiceNames() {
   const suffix = '-credentials';
-  if (process.env.CLAUDE_CONFIG_DIR) {
-    const crypto = require('crypto');
-    const hash = crypto.createHash('sha256').update(getConfigDir()).digest('hex').substring(0, 8);
-    return `Claude Code${suffix}-${hash}`;
-  }
-  return `Claude Code${suffix}`;
+  const legacy = `Claude Code${suffix}`;
+  // Claude Code always stores credentials under a hash of the config dir path.
+  // The legacy unhashed name is kept as a fallback for older installs.
+  const hash = crypto.createHash('sha256').update(getConfigDir()).digest('hex').substring(0, 8);
+  const hashed = `${legacy}-${hash}`;
+  return hashed === legacy ? [legacy] : [hashed, legacy];
+}
+
+function readFromKeychainEntry(service, user) {
+  const json = execFileSync(
+    'security',
+    ['find-generic-password', '-a', user, '-w', '-s', service],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
+  ).trim();
+  return JSON.parse(json);
 }
 
 function readFromKeychain() {
   if (process.platform !== 'darwin') return null;
-  try {
-    const service = getKeychainServiceName();
-    const user = process.env.USER || os.userInfo().username;
-    // execFileSync (no shell) so $USER can't be interpolated into a command string
-    const json = execFileSync(
-      'security',
-      ['find-generic-password', '-a', user, '-w', '-s', service],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
-    ).trim();
-    return JSON.parse(json);
-  } catch (err) {
-    console.error('[claude-auth] Keychain read error:', err.message);
-    return null;
+  const user = process.env.USER || os.userInfo().username;
+  let lastError = null;
+  for (const service of getKeychainServiceNames()) {
+    try {
+      const creds = readFromKeychainEntry(service, user);
+      if (creds?.claudeAiOauth?.accessToken) return creds;
+    } catch (err) {
+      lastError = err;
+    }
   }
+  if (lastError) {
+    console.error('[claude-auth] Keychain read error:', lastError.message);
+  }
+  return null;
 }
 
 function readFromFile() {
@@ -184,4 +194,11 @@ async function fetchAndTransformUsage() {
   }
 }
 
-module.exports = { getOAuthToken, fetchUsage, fetchAndTransformUsage, transformUsageResponse, getConfigDir };
+module.exports = {
+  getOAuthToken,
+  fetchUsage,
+  fetchAndTransformUsage,
+  transformUsageResponse,
+  getConfigDir,
+  getKeychainServiceNames,
+};
