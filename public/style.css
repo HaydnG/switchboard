@@ -2686,8 +2686,7 @@ input:focus-visible {
 .grid-card.focused.health-handoff-recommended {
   border-color: rgba(140,148,255,0.95);
   box-shadow:
-    0 0 0 1px rgba(140,148,255,0.7),
-    0 8px 26px rgba(110,118,240,0.32);
+    0 0 0 1px rgba(140, 148, 255, 0.7), 1px 3px 17px 1px rgba(110, 118, 240, 0.32)
 }
 
 @media (prefers-reduced-motion: reduce) {

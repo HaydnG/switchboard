@@ -4,6 +4,8 @@ dist/
 *.db-wal
 *.db-shm
 public/codemirror-bundle.js
+public/dist/
+public/lib/
 .DS_Store
 *.pem
 .env
