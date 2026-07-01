@@ -110,13 +110,8 @@
     </div>
   </div>
   </div><!-- /app-container -->
-  <div id="update-toast" class="hidden">
-    <span id="update-toast-msg">Update ready — restart to apply</span>
-    <button id="update-restart-btn">Restart</button>
-    <button id="update-dismiss-btn">Later</button>
-  </div>
+  <div id="react-root"></div>
   <div id="app-live-region" class="visually-hidden" aria-live="polite" aria-atomic="true"></div>
-  <div id="status-bar"><span id="status-bar-info"></span><span id="status-bar-usage"></span><span id="status-bar-activity"></span><span id="status-bar-updater"></span></div>
   <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>
@@ -146,7 +141,6 @@
   <script src="sidebar-state.js"></script>
   <script src="spring-cleaning-effects.js"></script>
   <script src="usage-status.js"></script>
-  <script src="control-dialogs.js"></script>
   <script src="session-timeline.js"></script>
   <script src="away-summary.js"></script>
   <script src="grid-layout.js"></script>
@@ -159,6 +153,7 @@
   <script src="dialogs.js"></script>
   <script src="sidebar.js"></script>
   <script src="plans-memory-view.js"></script>
+  <script src="dist/react-app.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

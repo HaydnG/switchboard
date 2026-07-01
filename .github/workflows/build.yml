@@ -56,8 +56,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
       - name: Bundle CodeMirror
         run: npm run bundle:codemirror
+
+      - name: Build React renderer
+        run: npm run build:renderer
 
       - name: Build
         run: npx electron-builder --${{ matrix.platform }} --publish never

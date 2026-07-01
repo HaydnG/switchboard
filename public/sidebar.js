@@ -397,12 +397,14 @@ function buildUserGroup(group, sessions, bodyNode) {
 
   // One-click launcher for every session in the group (attach running ones,
   // resume the rest). Hidden until header hover, mirroring the menu button.
-  const launchLabel = `Launch all ${sessions.length} session${sessions.length === 1 ? '' : 's'} in ${group.name}`;
   const launchBtn = document.createElement('button');
-  launchBtn.className = 'user-group-launch-btn';
-  launchBtn.title = launchLabel;
-  launchBtn.setAttribute('aria-label', launchLabel);
-  launchBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
+  if (sessions.length > 0) {
+    const launchLabel = `Launch all ${sessions.length} session${sessions.length === 1 ? '' : 's'} in ${group.name}`;
+    launchBtn.className = 'user-group-launch-btn';
+    launchBtn.title = launchLabel;
+    launchBtn.setAttribute('aria-label', launchLabel);
+    launchBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
+  }
 
   const newBtn = document.createElement('button');
   newBtn.className = 'user-group-new-btn';
@@ -425,7 +427,7 @@ function buildUserGroup(group, sessions, bodyNode) {
   // group still signals supervision needs; only mount them when non-empty so an
   // empty span doesn't introduce a stray flex gap.
   if (chips.childElementCount > 0) row.appendChild(chips);
-  row.appendChild(launchBtn);
+  if (sessions.length > 0) row.appendChild(launchBtn);
   row.appendChild(newBtn);
   row.appendChild(menuBtn);
   header.appendChild(row);
@@ -591,10 +593,21 @@ function sortSidebarSessions(sessions) {
 
 // Process a project's sessions: filter, sort, slug-group, order, and truncate.
 // Returns { filtered, visible, older, sortOrderEntry } or null if project should be skipped.
+function sidebarGroupVisibilityOptions() {
+  return {
+    showArchived: !!showArchived,
+    searchActive: searchMatchIds !== null,
+  };
+}
+
 function processProjectSessions(project, resort) {
     let filtered = filterSidebarSessions(project.sessions);
     const anyFilterActive = showStarredOnly || showRunningOnly || showTodayOnly || searchMatchIds !== null;
-    if (filtered.length === 0 && !project._projectMatchedOnly && (project.sessions.length > 0 || anyFilterActive)) return null;
+    const hasAssignedUserGroups = showRunningOnly
+      && typeof projectHasAssignedUserGroups === 'function'
+      && typeof groupsState !== 'undefined'
+      && projectHasAssignedUserGroups(groupsState, project.sessions, sidebarGroupVisibilityOptions());
+    if (filtered.length === 0 && !project._projectMatchedOnly && (project.sessions.length > 0 || anyFilterActive) && !hasAssignedUserGroups) return null;
 
     filtered = sortSidebarSessions(filtered);
 
@@ -602,10 +615,27 @@ function processProjectSessions(project, resort) {
     // group sections first; the remainder fall through to slug grouping. Groups
     // that span projects render in each project section filtered to that
     // project's members (cards stay under the project header for context).
-    const { grouped: userGroups, ungrouped: groupUngrouped } =
-      (typeof groupSessions === 'function' && typeof groupsState !== 'undefined')
-        ? groupSessions(groupsState, filtered)
-        : { grouped: [], ungrouped: filtered };
+    let userGroups;
+    let groupUngrouped;
+    if (typeof groupSessions === 'function' && typeof groupsState !== 'undefined') {
+      const partitioned = groupSessions(groupsState, filtered);
+      if (showRunningOnly && typeof expandUserGroupsForRunningFilter === 'function') {
+        const expanded = expandUserGroupsForRunningFilter(
+          groupsState,
+          project.sessions,
+          partitioned.grouped,
+          sidebarGroupVisibilityOptions(),
+        );
+        userGroups = expanded.grouped;
+        groupUngrouped = filtered.filter(s => !expanded.assignedSessionIds.has(s.sessionId));
+      } else {
+        userGroups = partitioned.grouped;
+        groupUngrouped = partitioned.ungrouped;
+      }
+    } else {
+      userGroups = [];
+      groupUngrouped = filtered;
+    }
 
     // Slug grouping (over sessions not claimed by a user group)
     const slugMap = new Map();
@@ -631,11 +661,16 @@ function processProjectSessions(project, resort) {
       allItems.push({ sortTime: mostRecentTime, pinned: hasPinned, running: hasRunning, element });
     }
     for (const { group, sessions } of userGroups) {
-      // Don't render a group section with no sessions in the current filtered
-      // view — an empty section would otherwise linger after its members are
-      // filtered out or unassigned.
-      if (!sessions || sessions.length === 0) continue;
-      const mostRecentTime = Math.max(...sessions.map(s => new Date(s.modified).getTime()));
+      // Don't render empty group sections unless "running only" is keeping them
+      // visible so the user can start a new session after stopping all members.
+      if ((!sessions || sessions.length === 0) && !showRunningOnly) continue;
+      const assignedInProject = (typeof filterSessionsForGroupVisibility === 'function' && typeof groupsState !== 'undefined')
+        ? filterSessionsForGroupVisibility(project.sessions, sidebarGroupVisibilityOptions())
+            .filter(s => groupsState.assignments?.[s.sessionId] === group.id)
+        : (sessions || []);
+      if (assignedInProject.length === 0) continue;
+      const timingSessions = (sessions && sessions.length > 0) ? sessions : assignedInProject;
+      const mostRecentTime = Math.max(...timingSessions.map(s => new Date(s.modified).getTime()));
       const hasRunning = sessions.some(s => activePtyIds.has(s.sessionId) || pendingSessions.has(s.sessionId));
       const hasPinned = sessions.some(s => s.starred);
       allItems.push({ sortTime: mostRecentTime, pinned: hasPinned, running: hasRunning, element: buildUserGroup(group, sessions) });
@@ -979,10 +1014,17 @@ function renderProjectsFolderFirst(projects, resort) {
   const projectMissing = new Map();
   const projectRecency = new Map();
 
+  const groupVisibilityOptions = sidebarGroupVisibilityOptions();
   for (const project of projects) {
     projectMissing.set(project.projectPath, !!project.missing);
     let filtered = filterSidebarSessions(project.sessions);
-    if (filtered.length === 0) continue;
+    const visibleForGroups = typeof filterSessionsForGroupVisibility === 'function'
+      ? filterSessionsForGroupVisibility(project.sessions, groupVisibilityOptions)
+      : project.sessions;
+    const hasAssignedUserGroups = showRunningOnly
+      && typeof projectHasAssignedUserGroups === 'function'
+      && projectHasAssignedUserGroups(groupsState, project.sessions, groupVisibilityOptions);
+    if (filtered.length === 0 && !hasAssignedUserGroups) continue;
     filtered = sortSidebarSessions(filtered);
     for (const session of filtered) {
       const t = new Date(session.modified).getTime();
@@ -995,6 +1037,14 @@ function renderProjectsFolderFirst(projects, resort) {
       } else {
         if (!ungroupedByProject.has(project.projectPath)) ungroupedByProject.set(project.projectPath, []);
         ungroupedByProject.get(project.projectPath).push(session);
+      }
+    }
+    if (showRunningOnly) {
+      for (const session of visibleForGroups) {
+        const gid = assignments[session.sessionId];
+        if (!gid || !groupIds.has(gid)) continue;
+        const bucket = folderBuckets.get(gid);
+        if (!bucket.has(project.projectPath)) bucket.set(project.projectPath, []);
       }
     }
   }

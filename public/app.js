@@ -2088,6 +2088,11 @@ function saveUpdateRestartState() {
   return state;
 }
 
+// Bridge for React updater UI until session state migrates off app.js.
+window.addEventListener('switchboard:save-update-restart-state', () => {
+  saveUpdateRestartState();
+});
+
 async function restoreUpdateRestartState() {
   if (typeof hasRestorableUpdateSessions !== 'function') return false;
   let state = null;
@@ -2202,61 +2207,7 @@ window.api.onStatusUpdate((text, type) => {
 
 scheduleUsageStatusRefresh();
 
-// --- Auto-update status + toast ---
-const statusBarUpdater = document.getElementById('status-bar-updater');
-let updaterStatusTimer = null;
-function setUpdaterStatus(text, duration) {
-  if (updaterStatusTimer) clearTimeout(updaterStatusTimer);
-  statusBarUpdater.textContent = text;
-  if (duration) {
-    updaterStatusTimer = setTimeout(() => { statusBarUpdater.textContent = ''; }, duration);
-  }
-}
-const updaterHandler = (type, data) => {
-  switch (type) {
-    case 'checking':
-      setUpdaterStatus('Checking for updates…');
-      break;
-    case 'update-available':
-      setUpdaterStatus(`Downloading v${data.version}…`);
-      break;
-    case 'update-not-available':
-      setUpdaterStatus('Up to date', 3000);
-      break;
-    case 'download-progress':
-      setUpdaterStatus(`Updating… ${Math.round(data.percent)}%`);
-      break;
-    case 'update-downloaded': {
-      setUpdaterStatus(`v${data.version} ready — restart to update`);
-      const dismissed = localStorage.getItem('update-dismissed');
-      if (dismissed === data.version) return;
-      const toast = document.getElementById('update-toast');
-      const msg = document.getElementById('update-toast-msg');
-      const notice = (data.releaseName && data.releaseName !== `v${data.version}` && data.releaseName !== data.version) ? `<span class="update-summary">${escapeHtml(data.releaseName)}</span>` : '';
-      msg.innerHTML = `New Version Ready<br><span class="update-version">v${data.version}</span> (<a href="https://github.com/doctly/switchboard/releases" target="_blank" class="update-notes-link">release notes</a>)${notice}`;
-      toast.classList.remove('hidden');
-      document.getElementById('update-restart-btn').onclick = async () => {
-        saveUpdateRestartState();
-        const result = await window.api.updaterInstall();
-        if (result?.ok === false) {
-          const message = result.dev
-            ? 'Update restart is only available in packaged builds.'
-            : (result.error || 'Update restart failed. Please reinstall from the releases page.');
-          showControlToast({ message });
-        }
-      };
-      document.getElementById('update-dismiss-btn').onclick = () => {
-        toast.classList.add('hidden');
-        localStorage.setItem('update-dismissed', data.version);
-      };
-      break;
-    }
-    case 'error':
-      setUpdaterStatus('Update check failed', 5000);
-      break;
-  }
-};
-window.api.onUpdaterEvent(updaterHandler);
+// Auto-update UI → src/renderer (UpdateToast + useUpdater)
 
 // --- Initialize file panel (MCP bridge UI) ---
 if (typeof initFilePanel === 'function') initFilePanel();
