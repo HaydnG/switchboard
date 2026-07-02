@@ -33,6 +33,12 @@ const cleanPtyEnv = Object.fromEntries(
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./shell-profiles');
 const { startScheduler } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
+const {
+  getRuntime,
+  getAgentRuntimes,
+  getRuntimeUiCatalog,
+  resolveRuntimeId,
+} = require('./agent-runtimes');
 
 
 
@@ -84,7 +90,7 @@ const {
   closeDb,
 } = require('./db');
 
-const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
+const PROJECTS_DIR = getRuntime('claude').sessionsDir;
 const PLANS_DIR = path.join(os.homedir(), '.claude', 'plans');
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const STATS_CACHE_PATH = path.join(CLAUDE_DIR, 'stats-cache.json');
@@ -402,7 +408,6 @@ const { deriveProjectPath } = require('./derive-project-path');
 // Session cache → session-cache.js
 const sessionCache = require('./session-cache');
 sessionCache.init({
-  PROJECTS_DIR,
   activeSessions,
   getMainWindow: () => mainWindow,
   log,
@@ -412,7 +417,7 @@ sessionCache.init({
     setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName,
   },
 });
-const { readSessionFile, readFolderFromFilesystem, refreshFolder, reconcileCacheFromFilesystem,
+const { readSessionFileForRuntime, readFolderFromFilesystem, refreshFolder, refreshFolderForRuntime, reconcileCacheFromFilesystem,
         buildProjectsFromCache, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker } = sessionCache;
 
 
@@ -1187,6 +1192,12 @@ const SETTING_DEFAULTS = {
   terminalTheme: 'switchboard',
   mcpEmulation: false,
   shellProfile: 'auto',
+  piProvider: '',
+  piModel: '',
+  piThinking: '',
+  ompProvider: '',
+  ompModel: '',
+  ompThinking: '',
 };
 
 ipcMain.handle('get-shell-profiles', () => {
@@ -1253,11 +1264,20 @@ ipcMain.handle('rename-session', (_event, sessionId, name) => {
   return { name: name || null };
 });
 
+ipcMain.handle('get-agent-runtimes', () => getRuntimeUiCatalog());
+
 // --- IPC: archive-session ---
 ipcMain.handle('read-session-jsonl', (_event, sessionId) => {
-  const folder = getCachedFolder(sessionId);
-  if (!folder) return { error: 'Session not found in cache' };
-  const jsonlPath = path.join(PROJECTS_DIR, folder, sessionId + '.jsonl');
+  const cached = getCachedSession(sessionId);
+  if (!cached) return { error: 'Session not found in cache' };
+  const runtime = getRuntime(cached.runtime);
+  const jsonlPath = runtime.resolveSessionFilePath(
+    runtime.sessionsDir,
+    cached.folder,
+    sessionId,
+    cached.sessionFile
+  );
+  if (!jsonlPath) return { error: 'Session file not found' };
   try {
     const content = fs.readFileSync(jsonlPath, 'utf-8');
     const entries = [];
@@ -1312,6 +1332,8 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   }
 
   const isPlainTerminal = sessionOptions?.type === 'terminal';
+  const runtimeId = resolveRuntimeId(sessionOptions, getCachedSession(sessionId));
+  const runtimeDef = runtimeId ? getRuntime(runtimeId) : null;
 
   // Resolve shell profile from effective settings
   const effectiveProfileId = (() => {
@@ -1344,29 +1366,20 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   let sessionSlug = null;
   let projectFolder = null;
 
-  if (!isPlainTerminal) {
-    // Snapshot existing .jsonl files before spawning (for new session + fork/plan detection)
-    projectFolder = encodeProjectPath(projectPath);
-    const claudeProjectDir = path.join(PROJECTS_DIR, projectFolder);
-    if (fs.existsSync(claudeProjectDir)) {
+  if (!isPlainTerminal && runtimeDef) {
+    projectFolder = runtimeDef.encodeProjectPath(projectPath);
+    const agentProjectDir = path.join(runtimeDef.sessionsDir, projectFolder);
+    if (fs.existsSync(agentProjectDir)) {
       try {
         knownJsonlFiles = new Set(
-          fs.readdirSync(claudeProjectDir).filter(f => f.endsWith('.jsonl'))
+          fs.readdirSync(agentProjectDir).filter(f => f.endsWith('.jsonl'))
         );
       } catch {}
     }
 
-    // Read slug from the session's jsonl file (for plan-accept detection)
-    if (!isNew) {
-      try {
-        const jsonlPath = path.join(claudeProjectDir, sessionId + '.jsonl');
-        const head = fs.readFileSync(jsonlPath, 'utf8').slice(0, 8000);
-        const firstLines = head.split('\n').filter(Boolean);
-        for (const line of firstLines) {
-          const entry = JSON.parse(line);
-          if (entry.slug) { sessionSlug = entry.slug; break; }
-        }
-      } catch {}
+    if (!isNew && runtimeDef.readResumeMetadata) {
+      const meta = runtimeDef.readResumeMetadata(agentProjectDir, sessionId);
+      if (meta.slug) sessionSlug = meta.slug;
     }
   }
 
@@ -1399,61 +1412,22 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
           } catch {}
         }
       }, 300);
-    } else {
-      // Build claude command, using array to prevent accidental shell injection
-      const claudeArgs = [];
-      if (sessionOptions?.forkFrom) {
-        claudeArgs.push('--resume', String(sessionOptions.forkFrom), '--fork-session');
-      } else if (isNew) {
-        claudeArgs.push('--session-id', String(sessionId));
-      } else {
-        claudeArgs.push('--resume', String(sessionId));
-      }
+    } else if (runtimeDef) {
+      const agentArgs = runtimeDef.buildSpawnArgs({ sessionId, isNew, sessionOptions });
+      let agentCmd = runtimeDef.command + ' ' + quoteArgvForShell(shell, agentArgs);
 
-      if (sessionOptions) {
-        if (sessionOptions.dangerouslySkipPermissions) {
-          claudeArgs.push('--dangerously-skip-permissions');
-        } else if (sessionOptions.permissionMode) {
-          claudeArgs.push('--permission-mode', String(sessionOptions.permissionMode));
-        }
-        if (sessionOptions.worktree) {
-          claudeArgs.push('--worktree');
-          if (sessionOptions.worktreeName) {
-            claudeArgs.push(String(sessionOptions.worktreeName));
-          }
-        }
-        if (sessionOptions.chrome) {
-          claudeArgs.push('--chrome');
-        }
-        if (sessionOptions.addDirs) {
-          const dirs = String(sessionOptions.addDirs).split(',').map(d => d.trim()).filter(Boolean);
-          for (const dir of dirs) {
-            claudeArgs.push('--add-dir', dir);
-          }
-        }
-      }
-
-      if (sessionOptions?.appendSystemPrompt) {
-        claudeArgs.push('--append-system-prompt', String(sessionOptions.appendSystemPrompt));
-      }
-
-      let claudeCmd = 'claude ' + quoteArgvForShell(shell, claudeArgs);
-
-      // preLaunchCmd is raw shell by design (e.g. "aws-vault exec profile --") — block newlines only
       if (sessionOptions?.preLaunchCmd) {
         const pre = String(sessionOptions.preLaunchCmd);
         if (/[\r\n]/.test(pre)) {
           return { ok: false, error: 'preLaunchCmd must not contain newlines' };
         }
-        claudeCmd = pre + ' ' + claudeCmd;
+        agentCmd = pre + ' ' + agentCmd;
       }
 
-      // Start MCP server for this session so Claude CLI sends diffs/file opens to Switchboard
-      // (skip if user disabled IDE emulation in global settings)
-      if (sessionOptions?.mcpEmulation !== false) {
+      if (runtimeDef.supportsMcp && sessionOptions?.mcpEmulation !== false) {
         try {
           mcpServer = await startMcpServer(sessionId, [projectPath], mainWindow, log);
-          claudeCmd += ' --ide';
+          agentCmd += ' --ide';
         } catch (err) {
           log.error(`[mcp] Failed to start MCP server for ${sessionId}: ${err.message}`);
         }
@@ -1468,17 +1442,13 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         ptyEnv.CLAUDE_CODE_SSE_PORT = String(mcpServer.port);
       }
 
-      ptyProcess = pty.spawn(shell, shellArgs(shell, claudeCmd, shellExtraArgs), {
+      ptyProcess = pty.spawn(shell, shellArgs(shell, agentCmd, shellExtraArgs), {
         name: 'xterm-256color',
         cols: 120,
         rows: 30,
         cwd: isWsl ? os.homedir() : projectPath,
-        // TERM_PROGRAM=iTerm.app: Claude Code checks this to decide whether to emit
-        // OSC 9 notifications (e.g. "needs your attention"). Without it, the packaged
-        // app's minimal Electron environment won't trigger those sequences.
         env: ptyEnv,
       });
-
     }
   } catch (err) {
     return { ok: false, error: `Error spawning PTY: ${err.message}` };
@@ -1489,7 +1459,10 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     outputBuffer: [], outputBufferSize: 0, altScreen: false,
     projectPath, firstResize: true,
     projectFolder, knownJsonlFiles, sessionSlug,
-    isPlainTerminal, forkFrom: sessionOptions?.forkFrom || null,
+    isPlainTerminal,
+    runtime: isPlainTerminal ? null : runtimeDef.id,
+    forkFrom: sessionOptions?.forkFrom || null,
+    _awaitingSessionFile: !!(runtimeDef?.usesTimestampedSessionFiles && isNew && !sessionOptions?.forkFrom && runtimeDef.id === 'omp'),
     mcpServer, _openedAt: Date.now(),
   };
   activeSessions.set(sessionId, session);
@@ -1663,58 +1636,45 @@ ipcMain.on('close-terminal', (_event, sessionId) => {
 
 // Session transitions → session-transitions.js
 const sessionTransitions = require('./session-transitions');
-sessionTransitions.init({ PROJECTS_DIR, activeSessions, getMainWindow: () => mainWindow, log, rekeyMcpServer });
-const { detectSessionTransitions } = sessionTransitions;
+sessionTransitions.init({ activeSessions, getMainWindow: () => mainWindow, log, rekeyMcpServer });
+const { detectTransitionsForRuntime } = sessionTransitions;
 
-// --- fs.watch on projects directory ---
-let projectsWatcher = null;
+// --- fs.watch on agent session directories ---
+const runtimeWatchers = [];
 
-function startProjectsWatcher() {
-  if (!fs.existsSync(PROJECTS_DIR)) return;
+function startRuntimeWatcher(runtime) {
+  if (!runtime.sessionsDir || !fs.existsSync(runtime.sessionsDir)) return;
 
   const pendingFolders = new Set();
-  let debounceTimer = null;
-  let firstPendingAt = 0;
-  // Coalesce bursts of fs events (500ms quiet window) but never wait longer than
-  // MAX_WAIT total — otherwise a continuously-streaming session keeps resetting the
-  // timer and the renderer is starved of updates (e.g. the AI-generated title never
-  // refreshes in the sidebar until the session falls quiet).
-  const QUIET_MS = 500;
-  const MAX_WAIT_MS = 2000;
+  const debounceState = { timer: null, firstPendingAt: 0, QUIET_MS: 500, MAX_WAIT_MS: 2000 };
 
   function flushChanges() {
-    debounceTimer = null;
-    firstPendingAt = 0;
+    debounceState.timer = null;
+    debounceState.firstPendingAt = 0;
     const folders = new Set(pendingFolders);
     pendingFolders.clear();
 
     let changed = false;
     for (const folder of folders) {
-      const folderPath = path.join(PROJECTS_DIR, folder);
+      const folderPath = path.join(runtime.sessionsDir, folder);
       if (fs.existsSync(folderPath)) {
-        detectSessionTransitions(folder);
-        refreshFolder(folder);
+        detectTransitionsForRuntime(runtime, folder);
+        refreshFolderForRuntime(runtime, folder);
       } else {
         deleteCachedFolder(folder);
       }
       changed = true;
     }
 
-    if (changed) {
-      notifyRendererProjectsChanged();
-    }
+    if (changed) notifyRendererProjectsChanged();
   }
 
   try {
-    projectsWatcher = fs.watch(PROJECTS_DIR, { recursive: true }, (_eventType, filename) => {
+    const watcher = fs.watch(runtime.sessionsDir, { recursive: true }, (_eventType, filename) => {
       if (!filename) return;
-
-      // filename is relative, e.g. "folder-name/sessions-index.json" or "folder-name/abc.jsonl"
       const parts = filename.split(path.sep);
       const folder = parts[0];
       if (!folder || folder === '.git') return;
-
-      // Only care about .jsonl changes or top-level folder add/remove
       const basename = parts[parts.length - 1];
       if (parts.length === 1) {
         pendingFolders.add(folder);
@@ -1725,17 +1685,23 @@ function startProjectsWatcher() {
       }
 
       const now = Date.now();
-      if (!firstPendingAt) firstPendingAt = now;
-      const wait = Math.min(QUIET_MS, Math.max(0, MAX_WAIT_MS - (now - firstPendingAt)));
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(flushChanges, wait);
+      if (!debounceState.firstPendingAt) debounceState.firstPendingAt = now;
+      const wait = Math.min(debounceState.QUIET_MS, Math.max(0, debounceState.MAX_WAIT_MS - (now - debounceState.firstPendingAt)));
+      if (debounceState.timer) clearTimeout(debounceState.timer);
+      debounceState.timer = setTimeout(flushChanges, wait);
     });
-
-    projectsWatcher.on('error', (err) => {
-      console.error('Projects watcher error:', err);
+    watcher.on('error', (err) => {
+      console.error(`[${runtime.id}] projects watcher error:`, err);
     });
+    runtimeWatchers.push(watcher);
   } catch (err) {
-    console.error('Failed to start projects watcher:', err);
+    console.error(`Failed to start ${runtime.id} projects watcher:`, err);
+  }
+}
+
+function startProjectsWatcher() {
+  for (const runtime of getAgentRuntimes()) {
+    startRuntimeWatcher(runtime);
   }
 }
 

@@ -58,6 +58,7 @@ test('reconcileCacheFromFilesystem indexes new and stale folders but skips up-to
     const fake = makeFakeDb(metaMap);
     sessionCache.init({
       PROJECTS_DIR: projectsDir,
+      runtimeSessionsDirs: { claude: projectsDir },
       activeSessions: new Map(),
       getMainWindow: () => null,
       log: console,

@@ -1620,6 +1620,8 @@ function buildSessionItem(session) {
   item.className = 'session-item';
   item.id = 'si-' + session.sessionId;
   if (session.type === 'terminal') item.classList.add('is-terminal');
+  const runtimeUi = getAgentRuntimeUi(session.runtime || 'claude');
+  if (runtimeUi.sidebarClass) item.classList.add(runtimeUi.sidebarClass);
   if (session.archived) item.classList.add('archived-item');
   if (activePtyIds.has(session.sessionId)) item.classList.add('has-running-pty');
   if (attentionSessions.has(session.sessionId)) item.classList.add('needs-attention');
@@ -1662,7 +1664,12 @@ function buildSessionItem(session) {
 
   const summaryEl = document.createElement('div');
   summaryEl.className = 'session-summary';
-  summaryEl.textContent = displayName;
+  if (runtimeUi.badge) {
+    const badgeClass = runtimeUi.id === 'pi' ? 'pi-badge' : `${runtimeUi.id}-badge`;
+    summaryEl.innerHTML = `<span class="${badgeClass}" title="${escapeHtml(runtimeUi.label)} session" aria-label="${escapeHtml(runtimeUi.label)} session">${escapeHtml(runtimeUi.badge)}</span> ` + escapeHtml(displayName);
+  } else {
+    summaryEl.textContent = displayName;
+  }
 
   const detailEl = document.createElement('div');
   detailEl.className = 'session-card-details';

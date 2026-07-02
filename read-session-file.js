@@ -97,6 +97,8 @@ function readSessionFile(filePath, folder, projectPath) {
       : 0;
     return {
       sessionId, folder, projectPath,
+      runtime: 'claude',
+      sessionFile: sessionId + '.jsonl',
       summary, firstPrompt: summary,
       created: stat.birthtime.toISOString(),
       modified: stat.mtime.toISOString(),

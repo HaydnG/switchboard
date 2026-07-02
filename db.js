@@ -130,6 +130,11 @@ const migrations = [
     try { db.exec('DELETE FROM search_map'); } catch {}
     try { db.exec('DELETE FROM search_fts'); } catch {}
   },
+  // v5: Pi runtime support — track agent runtime and Pi session filenames.
+  (db) => {
+    try { db.exec("ALTER TABLE session_cache ADD COLUMN runtime TEXT DEFAULT 'claude'"); } catch {}
+    try { db.exec('ALTER TABLE session_cache ADD COLUMN sessionFile TEXT'); } catch {}
+  },
 ];
 
 const currentDbVersion = (() => {
@@ -187,9 +192,9 @@ const stmts = {
       sessionId, folder, projectPath, summary, firstPrompt, created, modified,
       messageCount, userMessageCount, inputTokens, outputTokens, cacheCreationTokens,
       cacheReadTokens, largestUserPromptWords, startedAt, lastEntryAt, activeMinutes,
-      slug, aiTitle
+      slug, aiTitle, runtime, sessionFile
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(sessionId) DO UPDATE SET
       folder = excluded.folder, projectPath = excluded.projectPath,
       summary = excluded.summary, firstPrompt = excluded.firstPrompt,
@@ -205,7 +210,9 @@ const stmts = {
       lastEntryAt = excluded.lastEntryAt,
       activeMinutes = excluded.activeMinutes,
       slug = excluded.slug,
-      aiTitle = excluded.aiTitle
+      aiTitle = excluded.aiTitle,
+      runtime = excluded.runtime,
+      sessionFile = excluded.sessionFile
   `),
   cacheGetByFolder: db.prepare('SELECT sessionId, modified FROM session_cache WHERE folder = ?'),
   cacheGetFolder: db.prepare('SELECT folder FROM session_cache WHERE sessionId = ?'),
@@ -296,7 +303,8 @@ const upsertCachedSessionsBatch = db.transaction((sessions) => {
       s.cacheCreationTokens || 0, s.cacheReadTokens || 0,
       s.largestUserPromptWords || 0, s.startedAt || null, s.lastEntryAt || null,
       s.activeMinutes || 0,
-      s.slug || null, s.aiTitle || null
+      s.slug || null, s.aiTitle || null,
+      s.runtime || 'claude', s.sessionFile || null
     );
   }
 });
