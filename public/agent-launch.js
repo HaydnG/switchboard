@@ -93,3 +93,37 @@ function showConfigureDialogForRuntime(runtimeId, project, groupId) {
   if (runtimeId === 'pi') return showNewPiSessionDialog(project, groupId);
   if (runtimeId === 'omp') return showNewOmpSessionDialog(project, groupId);
 }
+
+function applyRuntimeLabel(el, runtimeId) {
+  if (!el) return;
+  const runtimeUi = getAgentRuntimeUi(runtimeId);
+  if (!runtimeUi.badge) {
+    el.textContent = '';
+    el.style.display = 'none';
+    el.className = 'session-runtime-label';
+    el.removeAttribute('title');
+    el.removeAttribute('aria-label');
+    return;
+  }
+  el.textContent = runtimeUi.badge;
+  el.className = `session-runtime-label is-${runtimeUi.id}`;
+  el.title = `${runtimeUi.label} session`;
+  el.setAttribute('aria-label', `${runtimeUi.label} session`);
+  el.style.display = '';
+}
+
+function fillSessionSummaryWithRuntime(summaryEl, session, displayName) {
+  const runtimeUi = getAgentRuntimeUi(session.runtime || 'claude');
+  summaryEl.textContent = '';
+  if (runtimeUi.badge) {
+    const runtimeLabel = document.createElement('span');
+    runtimeLabel.className = `session-runtime-label is-${runtimeUi.id}`;
+    runtimeLabel.title = `${runtimeUi.label} session`;
+    runtimeLabel.setAttribute('aria-label', `${runtimeUi.label} session`);
+    runtimeLabel.textContent = runtimeUi.badge;
+    summaryEl.appendChild(runtimeLabel);
+    summaryEl.appendChild(document.createTextNode(' ' + displayName));
+  } else {
+    summaryEl.textContent = displayName;
+  }
+}

@@ -4896,43 +4896,40 @@ input:focus-visible {
   box-shadow: 0 0 6px rgba(62,207,90,0.5);
 }
 
-.pi-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 3px;
-  border-radius: 4px;
-  background: rgba(139, 92, 246, 0.18);
-  color: #c4b5fd;
-  font-family: 'Times New Roman', Georgia, serif;
+.session-runtime-label {
+  display: inline;
+  margin-right: 5px;
+  color: #9090a8;
   font-size: 12px;
   font-weight: 600;
-  margin-right: 4px;
-  vertical-align: middle;
+  vertical-align: baseline;
+}
+
+.session-runtime-label.is-pi {
+  font-family: 'Times New Roman', Georgia, serif;
+  font-size: 13px;
+  color: #c4b5fd;
+}
+
+.session-runtime-label.is-omp {
+  font-size: 10px;
+  color: #86efac;
+  letter-spacing: -0.02em;
+}
+
+#terminal-header-runtime.session-runtime-label {
+  flex-shrink: 0;
+  margin-right: 0;
+}
+
+#terminal-header-runtime.is-pi,
+#terminal-header-runtime.is-omp {
+  margin-right: 6px;
 }
 
 .session-item.is-pi .session-status-dot.running {
   background: #a78bfa;
   box-shadow: 0 0 6px rgba(167, 139, 250, 0.45);
-}
-
-.omp-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: 4px;
-  background: rgba(34, 197, 94, 0.18);
-  color: #86efac;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  margin-right: 4px;
-  vertical-align: middle;
 }
 
 .session-item.is-omp .session-status-dot.running {

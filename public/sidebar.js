@@ -1664,12 +1664,7 @@ function buildSessionItem(session) {
 
   const summaryEl = document.createElement('div');
   summaryEl.className = 'session-summary';
-  if (runtimeUi.badge) {
-    const badgeClass = runtimeUi.id === 'pi' ? 'pi-badge' : `${runtimeUi.id}-badge`;
-    summaryEl.innerHTML = `<span class="${badgeClass}" title="${escapeHtml(runtimeUi.label)} session" aria-label="${escapeHtml(runtimeUi.label)} session">${escapeHtml(runtimeUi.badge)}</span> ` + escapeHtml(displayName);
-  } else {
-    summaryEl.textContent = displayName;
-  }
+  fillSessionSummaryWithRuntime(summaryEl, session, displayName);
 
   const detailEl = document.createElement('div');
   detailEl.className = 'session-card-details';
