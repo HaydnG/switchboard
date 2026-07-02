@@ -10,6 +10,7 @@ const starToggle = document.getElementById('star-toggle');
 const searchInput = document.getElementById('search-input');
 const terminalHeader = document.getElementById('terminal-header');
 const terminalHeaderName = document.getElementById('terminal-header-name');
+const terminalHeaderRuntime = document.getElementById('terminal-header-runtime');
 const terminalHeaderId = document.getElementById('terminal-header-id');
 const terminalHeaderStatus = document.getElementById('terminal-header-status');
 const terminalHeaderShell = document.getElementById('terminal-header-shell');
@@ -100,6 +101,12 @@ function saveCollapsedGroups() {
 }
 function persistGroupsState() {
   return window.api.setSetting('groups', serialize(groupsState));
+}
+function rekeySessionGroupAssignment(oldSessionId, newSessionId) {
+  if (!oldSessionId || !newSessionId || oldSessionId === newSessionId) return;
+  if (typeof rekeySessionAssignment !== 'function' || typeof groupsState === 'undefined') return;
+  rekeySessionAssignment(groupsState, oldSessionId, newSessionId);
+  persistGroupsState();
 }
 // Mutation helpers used by sidebar/grid assignment UI. Each persists and
 // refreshes the affected views.
@@ -788,8 +795,19 @@ window.api.onSessionDetected((tempId, realId) => {
   }
   recordTimelineEvent(realId, 'started', 'Session detected', 'Claude wrote its real session id.');
 
+  const pendingEntry = pendingSessions.get(tempId);
+  pendingSessions.delete(tempId);
+  if (pendingEntry) {
+    pendingEntry.session.sessionId = realId;
+    pendingSessions.set(realId, pendingEntry);
+  }
+  sessionMap.delete(tempId);
+  sessionMap.set(realId, entry.session);
+  rekeySessionGroupAssignment(tempId, realId);
+
   terminalHeaderId.textContent = realId;
   terminalHeaderName.textContent = 'New session';
+  applyRuntimeLabel(terminalHeaderRuntime, entry.session.runtime);
 
   // Refresh sidebar to show the new session, then select it
   loadProjects().then(() => {
@@ -830,16 +848,18 @@ window.api.onSessionForked((oldId, newId) => {
   }
   sessionMap.delete(oldId);
   sessionMap.set(newId, entry.session);
+  rekeySessionGroupAssignment(oldId, newId);
 
   terminalHeaderId.textContent = newId;
+  applyRuntimeLabel(terminalHeaderRuntime, entry.session.runtime);
 
   loadProjects().then(() => {
     const item = document.querySelector(`[data-session-id="${newId}"]`);
     if (item) {
       document.querySelectorAll('.session-item.active').forEach(el => el.classList.remove('active'));
       item.classList.add('active');
-      const summary = item.querySelector('.session-summary');
-      if (summary) terminalHeaderName.textContent = summary.textContent;
+      const displayName = cleanDisplayName(entry.session.name || entry.session.aiTitle || entry.session.summary);
+      terminalHeaderName.textContent = displayName;
     }
   });
   pollActiveSessions();
@@ -1506,6 +1526,7 @@ function openNewSession(project) {
 
 async function showTerminalHeader(session) {
   const displayName = cleanDisplayName(session.name || session.aiTitle || session.summary);
+  applyRuntimeLabel(terminalHeaderRuntime, session.runtime);
   terminalHeaderName.textContent = displayName;
   terminalHeaderId.textContent = session.sessionId;
   terminalHeader.style.display = '';

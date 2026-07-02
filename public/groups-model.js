@@ -86,6 +86,17 @@
     return state;
   }
 
+  /** Keep group membership when a live session's id is re-keyed (fork / pi-like transition). */
+  function rekeySessionAssignment(state, oldSessionId, newSessionId) {
+    if (!oldSessionId || !newSessionId || oldSessionId === newSessionId) return state;
+    const groupId = state.assignments[oldSessionId];
+    if (groupId) {
+      state.assignments[newSessionId] = groupId;
+      delete state.assignments[oldSessionId];
+    }
+    return state;
+  }
+
   function reorderGroups(state, orderedIds) {
     const orderIndex = new Map(orderedIds.map((id, index) => [id, index]));
     for (const group of state.groups) {
@@ -177,6 +188,7 @@
     recolorGroup,
     removeGroup,
     assignSession,
+    rekeySessionAssignment,
     reorderGroups,
     getGroupForSession,
     groupSessions,
