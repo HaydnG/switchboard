@@ -1401,11 +1401,14 @@ async function loadProjects({ resort = false } = {}) {
 async function launchNewSession(project, sessionOptions, seedText, groupId) {
   const sessionId = crypto.randomUUID();
   const projectPath = project.projectPath;
+  const runtime = sessionOptions?.runtime || 'claude';
+  const runtimeUi = getAgentRuntimeUi(runtime);
   const session = {
     sessionId,
-    summary: 'New session',
+    summary: runtimeUi.newSessionSummary,
     firstPrompt: '',
     projectPath,
+    runtime,
     name: null,
     starred: 0,
     archived: 0,
@@ -1645,7 +1648,8 @@ async function openSession(session, customOptions) {
   const entry = createTerminalEntry(session);
 
   // Open terminal in main process
-  const resumeOptions = customOptions || await resolveDefaultSessionOptions({ projectPath });
+  const resumeOptions = customOptions || await resolveLaunchOptions(session.runtime || 'claude', { projectPath });
+  resumeOptions.runtime = session.runtime || resumeOptions.runtime || 'claude';
   // The `worktree` default applies to NEW sessions only. Resuming must reuse the
   // session's existing directory, so never pass --worktree on resume — otherwise
   // a plain-click resume tries to spin up a fresh git worktree and fails to attach
@@ -1683,7 +1687,8 @@ async function attachRunningSession(session) {
   // Resume options mirror openSession() (worktree stripped) so that, in the rare
   // race where the PTY exited between the last poll and now, the fallback spawn
   // still resumes the existing session rather than starting a fresh one.
-  const resumeOptions = await resolveDefaultSessionOptions({ projectPath });
+  const resumeOptions = await resolveLaunchOptions(session.runtime || 'claude', { projectPath });
+  resumeOptions.runtime = session.runtime || resumeOptions.runtime || 'claude';
   if (resumeOptions) { delete resumeOptions.worktree; delete resumeOptions.worktreeName; }
   const result = await window.api.openTerminal(sessionId, projectPath, false, resumeOptions);
   if (!result || !result.ok) {

@@ -194,6 +194,7 @@ test('buildProjectsFromCache exposes health metrics on renderer session rows', (
       }],
       getSetting: () => null,
       setFolderMeta: () => {},
+      getAllFolderMeta: () => new Map(),
     },
   });
 

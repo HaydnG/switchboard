@@ -107,8 +107,8 @@ function isAtBottom(terminal) {
 function safeFit(entry) {
   const dims = entry.fitAddon.proposeDimensions();
   if (dims && dims.rows > 1) {
-    entry.terminal.resize(dims.cols, dims.rows);
-  } else {
+    entry.terminal.resize(dims.cols, Math.max(1, dims.rows - 1));
+  } else if (dims) {
     entry.fitAddon.fit();
   }
 }

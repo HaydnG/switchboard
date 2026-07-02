@@ -2217,9 +2217,9 @@ input:focus-visible {
 
 .terminal-container {
   position: absolute;
-  inset: -5px 20px 0 0;
+  inset: -5px 20px 2px 0;
   display: none;
-  padding: 8px 0 8px 8px;
+  padding: 8px 0 12px 8px;
   overflow: hidden;
 }
 
@@ -2712,7 +2712,7 @@ input:focus-visible {
      sibling, so clipping here doesn't affect its stickiness. */
   min-width: 0;
   overflow: hidden;
-  padding: 6px 0 6px 6px;
+  padding: 6px 0 10px 6px;
 }
 
 .grid-card-footer {
@@ -4842,6 +4842,34 @@ input:focus-visible {
   border-radius: 3px;
 }
 
+.popover-option-icon.pi-icon {
+  font-family: 'Times New Roman', Georgia, serif;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
+  color: #c4b5fd;
+  width: 16px;
+  text-align: center;
+}
+
+.popover-option:hover .popover-option-icon.pi-icon {
+  color: #ddd6fe;
+}
+
+.popover-option-icon.omp-icon {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  color: #86efac;
+  width: 16px;
+  text-align: center;
+}
+
+.popover-option:hover .popover-option-icon.omp-icon {
+  color: #bbf7d0;
+}
+
 .popover-option-terminal .popover-option-icon,
 .terminal-icon {
   color: #3ecf5a;
@@ -4866,6 +4894,50 @@ input:focus-visible {
 .session-item.is-terminal .session-status-dot.running {
   background: #3ecf5a;
   box-shadow: 0 0 6px rgba(62,207,90,0.5);
+}
+
+.pi-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 4px;
+  background: rgba(139, 92, 246, 0.18);
+  color: #c4b5fd;
+  font-family: 'Times New Roman', Georgia, serif;
+  font-size: 12px;
+  font-weight: 600;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+.session-item.is-pi .session-status-dot.running {
+  background: #a78bfa;
+  box-shadow: 0 0 6px rgba(167, 139, 250, 0.45);
+}
+
+.omp-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: rgba(34, 197, 94, 0.18);
+  color: #86efac;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+.session-item.is-omp .session-status-dot.running {
+  background: #4ade80;
+  box-shadow: 0 0 6px rgba(74, 222, 128, 0.45);
 }
 
 /* ========== FILE PANEL (MCP Bridge) ========== */
