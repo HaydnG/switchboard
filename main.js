@@ -1240,6 +1240,37 @@ ipcMain.handle('get-active-terminals', () => {
   return terminals;
 });
 
+// --- IPC: get-git-summary --- (branch + porcelain status + numstat for a
+// session's working directory; raw strings, parsed by the renderer's pure
+// git-summary module). Only sessions with a live PTY are polled, so the path
+// is validated against the directories we actually spawned into.
+ipcMain.handle('get-git-summary', async (_event, projectPath) => {
+  if (typeof projectPath !== 'string' || !projectPath) return { ok: false };
+  let isKnown = false;
+  for (const [, session] of activeSessions) {
+    if (!session.exited && session.projectPath === projectPath) { isKnown = true; break; }
+  }
+  if (!isKnown) return { ok: false };
+  try {
+    if (!fs.statSync(projectPath).isDirectory()) return { ok: false };
+  } catch { return { ok: false }; }
+
+  const { execFile } = require('child_process');
+  const run = (args) => new Promise((resolve) => {
+    execFile('git', ['-C', projectPath, ...args], { timeout: 4000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+      resolve(err ? null : stdout);
+    });
+  });
+
+  const branch = await run(['rev-parse', '--abbrev-ref', 'HEAD']);
+  if (branch === null) return { ok: false }; // not a repo (or no commits yet)
+  const [status, numstat] = await Promise.all([
+    run(['status', '--porcelain=v1', '-z']),
+    run(['diff', '--numstat', 'HEAD']), // staged + unstaged vs HEAD
+  ]);
+  return { ok: true, branch: branch.trim(), status, numstat };
+});
+
 // --- IPC: stop-session ---
 ipcMain.handle('stop-session', (_event, sessionId) => {
   const session = activeSessions.get(sessionId);

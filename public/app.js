@@ -243,6 +243,9 @@ window._applyTerminalTheme = (themeName) => {
     entry.element.style.backgroundColor = TERMINAL_THEME.background;
   }
 };
+window._applySidebarDensity = (mode) => {
+  document.getElementById('sidebar').classList.toggle('density-compact', mode === 'compact');
+};
 
 // Cached copy of the global settings blob, kept in sync with the settings panel.
 // Used for the attention alert sound and the next-attention hotkey binding.
@@ -415,6 +418,11 @@ function setActivity(sessionId, active) {
         item.classList.add('response-ready');
       }
       refreshSessionStatusViews();
+    }
+    // Agent finished a turn → flush the next queued prompt (one per idle
+    // transition, so each queued instruction gets its own turn).
+    if (typeof deliverQueuedPrompts === 'function') {
+      deliverQueuedPrompts(sessionId, { justWentIdle: true });
     }
   }
 
@@ -1813,6 +1821,10 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
 // Grid view → grid-view.js
 // Initialize grid observers now that DOM refs are ready
 initGridObservers();
+// Git-aware cards: background branch/dirty-state poll for live sessions.
+startGitPolling();
+// Prompt queue: delivery safety-net tick (primary trigger is setActivity).
+startPromptQueueEngine();
 
 // JSONL viewer (renderJsonlText, formatDuration, makeCollapsible, renderJsonlEntry, showJsonlViewer) → jsonl-viewer.js
 
@@ -1902,6 +1914,12 @@ initGridObservers();
       toggleGridView();
       return;
     }
+    // Cmd/Ctrl+K → command palette
+    if (e.key === 'k' && mod && !e.shiftKey && !e.altKey) {
+      e.preventDefault();
+      toggleCommandPalette();
+      return;
+    }
     // Cmd/Ctrl+Shift+A (data-driven) → focus next session needing attention
     if (typeof isNextAttentionKey === 'function' && isNextAttentionKey(e, nextAttentionBinding)) {
       e.preventDefault();
@@ -1943,6 +1961,9 @@ setTimeout(() => {
     window._applyNotificationSettings(global);
     if (global.sidebarWidth) {
       document.getElementById('sidebar').style.width = global.sidebarWidth + 'px';
+    }
+    if (global.sidebarDensity) {
+      window._applySidebarDensity(global.sidebarDensity);
     }
     if (global.visibleSessionCount) {
       visibleSessionCount = global.visibleSessionCount;
