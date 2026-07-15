@@ -28,6 +28,12 @@ function setupTerminalKeyBindings(terminal, container, getSessionId, { onFind } 
       return false;
     }
 
+    // Cmd/Ctrl+K → command palette
+    if (e.key === 'k' && (isMac ? e.metaKey : e.ctrlKey) && !e.shiftKey && !e.altKey) {
+      if (e.type === 'keydown') { e._handled = true; toggleCommandPalette(); }
+      return false;
+    }
+
     // Session navigation: Cmd+Shift+[/], Cmd+Arrow
     if (isSessionNavKey(e)) {
       if (e.type === 'keydown') { e._handled = true; handleSessionNavKey(e); }

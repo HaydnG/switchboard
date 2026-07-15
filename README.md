@@ -11,6 +11,10 @@ Switchboard is a desktop app that gives you a unified view of all your Claude Co
 - **Session Browser** — All your Claude Code sessions, organized by project, searchable by content
 - **Built-in Terminal** — Connect to running sessions or launch new ones without leaving the app
 - **Attention Inbox** — A prioritized queue of every session that needs you, with a "Focus next" jump and a keyboard shortcut
+- **Quick Actions** — Approve, deny, or reply to a waiting agent straight from the attention inbox or a grid card, without focusing its terminal
+- **Command Palette** — `Cmd/Ctrl+K` fuzzy-jump to any session, project, or app action
+- **Git-Aware Cards** — Each live session's card shows its branch and dirty state (+/− lines, changed files) at a glance
+- **Prompt Queue** — Compose instructions for a busy agent; they deliver automatically, one per turn, when it goes idle
 - **Native Notifications** — OS notifications, dock/taskbar badge, and a tray icon when an agent needs you — even when Switchboard is in the background
 - **Session Health & Handoff** — Flags long/expensive sessions and turns "Handoff Recommended" into a one-click fresh-start with a context packet
 - **Session Groups** — User-defined colored folders for organising agents, with a flexible resize/drag grid layout
@@ -100,6 +104,7 @@ Switchboard treats your sessions like an agent control room — surfacing not ju
 |----------|--------|
 | `Cmd+F` / `Ctrl+F` | Find in file (also works in terminal) |
 | `Cmd+G` / `Ctrl+G` | Go to line |
+| `Cmd+K` / `Ctrl+K` | Command palette (sessions, projects, actions) |
 | `Cmd+Shift+A` / `Ctrl+Shift+A` | Focus next session needing attention |
 | `Cmd+Shift+G` / `Ctrl+Shift+G` | Toggle grid overview |
 

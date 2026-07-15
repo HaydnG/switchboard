@@ -72,6 +72,7 @@
     const visCountValue = fieldValue('visibleSessionCount', 10);
     const maxAgeValue = fieldValue('sessionMaxAgeDays', 3);
     const themeValue = fieldValue('terminalTheme', 'switchboard');
+    const sidebarDensityValue = fieldValue('sidebarDensity', 'comfortable');
     const mcpEmulationValue = fieldValue('mcpEmulation', true);
     const restoreSessionsValue = fieldValue('restoreSessionsOnLaunch', true);
     const attentionHooksValue = fieldValue('attentionHooks', false);
@@ -207,6 +208,19 @@
               ${Object.entries(TERMINAL_THEMES).map(([key, t]) =>
                 `<option value="${key}" ${themeValue === key ? 'selected' : ''}>${escapeHtml(t.label)}</option>`
               ).join('')}
+            </select>
+          </div>
+        </div>
+
+        <div class="settings-field">
+          <div class="settings-field-info">
+            <span class="settings-label">Sidebar Density</span>
+            <div class="settings-description">Compact shows one line per session; metrics move to the hover tooltip</div>
+          </div>
+          <div class="settings-field-control">
+            <select class="settings-select" id="sv-sidebar-density">
+              <option value="comfortable" ${sidebarDensityValue === 'comfortable' ? 'selected' : ''}>Comfortable</option>
+              <option value="compact" ${sidebarDensityValue === 'compact' ? 'selected' : ''}>Compact</option>
             </select>
           </div>
         </div>
@@ -402,6 +416,7 @@
         settings.visibleSessionCount = parseInt(settingsViewerBody.querySelector('#sv-visible-count').value) || 10;
         settings.sessionMaxAgeDays = parseInt(settingsViewerBody.querySelector('#sv-max-age').value) || 3;
         settings.terminalTheme = settingsViewerBody.querySelector('#sv-terminal-theme').value || 'switchboard';
+        settings.sidebarDensity = settingsViewerBody.querySelector('#sv-sidebar-density').value || 'comfortable';
         settings.mcpEmulation = settingsViewerBody.querySelector('#sv-mcp-emulation').checked;
         settings.restoreSessionsOnLaunch = settingsViewerBody.querySelector('#sv-restore-sessions').checked;
         settings.attentionHooks = settingsViewerBody.querySelector('#sv-attention-hooks').checked;
@@ -432,6 +447,9 @@
         }
         if (settings.terminalTheme && typeof window._applyTerminalTheme === 'function') {
           window._applyTerminalTheme(settings.terminalTheme);
+        }
+        if (typeof window._applySidebarDensity === 'function') {
+          window._applySidebarDensity(settings.sidebarDensity);
         }
         if (settings.notifications && typeof window._setNotificationSettings === 'function') {
           window._setNotificationSettings(settings.notifications);

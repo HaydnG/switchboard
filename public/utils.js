@@ -46,3 +46,17 @@ function escapeHtml(str) {
 function shellEscape(path) {
   return "'" + path.replace(/'/g, "'\\''") + "'";
 }
+
+// Place a fixed-position popover under `anchor`, clamped to the viewport;
+// flips above when the bottom edge would clip. Call after appending to the DOM
+// (needs measured offsetWidth/Height).
+function positionPopoverNear(pop, anchor) {
+  const r = anchor.getBoundingClientRect();
+  const pw = pop.offsetWidth;
+  const ph = pop.offsetHeight;
+  const left = Math.min(Math.max(8, r.left), window.innerWidth - pw - 8);
+  let top = r.bottom + 6;
+  if (top + ph > window.innerHeight - 8) top = Math.max(8, r.top - ph - 6);
+  pop.style.left = `${left}px`;
+  pop.style.top = `${top}px`;
+}

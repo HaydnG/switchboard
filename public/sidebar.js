@@ -310,10 +310,11 @@ function buildAttentionInbox(projects) {
   list.className = 'attention-inbox-list';
 
   for (const { session, status } of items) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = `attention-inbox-item ${status.className}`;
-    button.dataset.sessionId = session.sessionId;
+    // A div (not <button>) so the row can host nested quick-action buttons;
+    // rebindSidebarEvents makes it keyboard-operable via makeButtonLike.
+    const row = document.createElement('div');
+    row.className = `attention-inbox-item ${status.className}`;
+    row.dataset.sessionId = session.sessionId;
 
     const displayName = cleanDisplayName(session.name || session.aiTitle || session.summary) || session.sessionId;
     const modified = lastActivityTime.get(session.sessionId) || new Date(session.modified);
@@ -324,12 +325,14 @@ function buildAttentionInbox(projects) {
     const groupChip = group
       ? `<span class="attention-inbox-group-dot" style="background:${escapeHtml(group.color)}"></span>${escapeHtml(group.name)} · `
       : '';
-    button.innerHTML = `
-      <span class="attention-inbox-status">${escapeHtml(status.label)}</span>
+    row.innerHTML = `
+      <span class="status-pill attention-inbox-status">${escapeHtml(status.label)}</span>
       <span class="attention-inbox-title">${escapeHtml(displayName)}</span>
       <span class="attention-inbox-meta">${groupChip}${escapeHtml(getSessionProjectLabel(session))} · ${escapeHtml(timeStr)}</span>
     `;
-    list.appendChild(button);
+    const actionsBar = typeof buildQuickActionsBar === 'function' ? buildQuickActionsBar(session.sessionId) : null;
+    if (actionsBar) row.appendChild(actionsBar);
+    list.appendChild(row);
   }
 
   section.appendChild(list);
@@ -1143,7 +1146,12 @@ function rebindSidebarEvents(projects) {
     const sessionId = item.dataset.sessionId;
     const session = sessionMap.get(sessionId);
     if (!session) return;
-    item.onclick = () => openSession(session);
+    const open = (e) => {
+      if (e?.target?.closest?.('button')) return;
+      openSession(session);
+    };
+    item.onclick = open;
+    makeButtonLike(item, open, `Open ${cleanDisplayName(session.name || session.aiTitle || session.summary) || sessionId}`);
   });
 
   for (const project of projects) {
@@ -1701,6 +1709,8 @@ function buildSessionItem(session) {
     quietLine.className = 'session-quiet-details';
     quietLine.textContent = quietParts.join(' · ');
     detailEl.appendChild(quietLine);
+    // Compact density hides the metrics line; keep them reachable on hover.
+    item.title = quietParts.join(' · ');
   }
 
   if (session.type === 'terminal') {
@@ -1709,6 +1719,11 @@ function buildSessionItem(session) {
     badge.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>';
     summaryEl.prepend(badge);
   }
+  // Shown only in compact density (CSS): time stays visible when the
+  // quiet-details line is hidden.
+  const compactTime = document.createElement('span');
+  compactTime.className = 'session-time-compact';
+  compactTime.textContent = timeStr;
   info.appendChild(summaryEl);
   if (detailEl.children.length > 0) info.appendChild(detailEl);
 
@@ -1779,6 +1794,7 @@ function buildSessionItem(session) {
 
   row.appendChild(indicators);
   row.appendChild(info);
+  row.appendChild(compactTime);
   row.appendChild(actions);
   item.appendChild(row);
 

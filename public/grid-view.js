@@ -109,7 +109,7 @@ function renderGridStatusFilters() {
   for (const [key, label, count] of filters) {
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'grid-status-filter' + (gridStatusFilter === key ? ' active' : '');
+    btn.className = 'chip grid-status-filter' + (gridStatusFilter === key ? ' active' : '');
     btn.dataset.filter = key;
     btn.textContent = `${label} ${count}`;
     btn.disabled = key !== 'all' && count === 0;
@@ -150,7 +150,7 @@ function renderGridBulkActions() {
 
   const stepBtn = document.createElement('button');
   stepBtn.type = 'button';
-  stepBtn.className = 'grid-bulk-btn';
+  stepBtn.className = 'btn grid-bulk-btn';
   stepBtn.innerHTML = '<span class="grid-bulk-icon" aria-hidden="true">▶</span> Step';
   stepBtn.title = 'Focus the next session needing attention';
   stepBtn.disabled = targets.queue.length === 0;
@@ -159,7 +159,7 @@ function renderGridBulkActions() {
 
   const seenBtn = document.createElement('button');
   seenBtn.type = 'button';
-  seenBtn.className = 'grid-bulk-btn';
+  seenBtn.className = 'btn grid-bulk-btn';
   seenBtn.textContent = `Mark ${targets.readyToClear.length} ready seen`;
   seenBtn.title = 'Clear the unread "ready" flag for every ready session in view';
   seenBtn.disabled = targets.readyToClear.length === 0;
@@ -168,7 +168,7 @@ function renderGridBulkActions() {
 
   const stopBtn = document.createElement('button');
   stopBtn.type = 'button';
-  stopBtn.className = 'grid-bulk-btn grid-bulk-btn-danger';
+  stopBtn.className = 'btn btn-danger grid-bulk-btn';
   stopBtn.textContent = `Stop ${targets.runningToStop.length} running`;
   stopBtn.title = 'Stop every running session in view (asks for confirmation)';
   stopBtn.disabled = targets.runningToStop.length === 0;
@@ -181,6 +181,7 @@ function renderGridBulkActions() {
   const collapseAllBtn = document.createElement('button');
   collapseAllBtn.type = 'button';
   collapseAllBtn.id = 'grid-collapse-all-btn';
+    collapseAllBtn.className = 'btn';
   collapseAllBtn.title = 'Collapse all groups';
   collapseAllBtn.addEventListener('click', toggleGridCollapseAll);
   container.appendChild(collapseAllBtn);
@@ -273,7 +274,7 @@ function renderGridGroupFilters(container) {
   for (const [key, label, count, color] of options) {
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'grid-group-filter' + (gridGroupFilter === key ? ' active' : '');
+    btn.className = 'chip grid-group-filter' + (gridGroupFilter === key ? ' active' : '');
     btn.dataset.group = key;
     if (color) {
       const dot = document.createElement('span');
@@ -498,7 +499,7 @@ function wrapInGridCard(sessionId, parent, layout) {
   name.textContent = displayName;
   header.appendChild(name);
   const statusChip = document.createElement('span');
-  statusChip.className = `grid-card-status-chip ${status.className}`;
+  statusChip.className = `status-pill grid-card-status-chip ${status.className}`;
   statusChip.textContent = status.label;
   header.appendChild(statusChip);
   if (health.state !== 'healthy') {
@@ -553,6 +554,8 @@ function wrapInGridCard(sessionId, parent, layout) {
   const timeSpan = document.createElement('span');
   timeSpan.textContent = formatDate(lastActivityTime.get(sessionId) || new Date(session.modified));
   footer.appendChild(statusSpan);
+  const actionsBar = typeof buildQuickActionsBar === 'function' ? buildQuickActionsBar(sessionId) : null;
+  if (actionsBar) footer.appendChild(actionsBar);
   footer.appendChild(timeSpan);
 
   // Corner resize handle (spec 08) — drag to snap col/row spans.
@@ -1141,7 +1144,7 @@ function openSnapLayoutPopover(sessionId, card, anchor, { hover = false } = {}) 
     });
 
   const pop = document.createElement('div');
-  pop.className = 'snap-layout-popover';
+  pop.className = 'popover snap-layout-popover';
   pop.dataset.sessionId = sessionId;
   const curCols = Number(card.dataset.colSpan) || 1;
   const curRows = Number(card.dataset.rowSpan) || 1;
@@ -1213,6 +1216,7 @@ function unwrapGridCards() {
   gridCards.clear();
   // Remove any group region containers and reset grouped layout
   terminalsEl.querySelectorAll('.grid-region').forEach(el => el.remove());
+  document.getElementById('grid-empty-state')?.remove();
   terminalsEl.classList.remove('grid-grouped');
 }
 
@@ -1324,7 +1328,7 @@ function updateGridCardStatuses() {
     card.classList.add(status.className, health.className);
     const chip = card.querySelector('.grid-card-status-chip');
     if (chip) {
-      chip.className = `grid-card-status-chip ${status.className}`;
+      chip.className = `status-pill grid-card-status-chip ${status.className}`;
       chip.textContent = status.label;
     }
     const healthChip = card.querySelector('.grid-card-health-chip');
@@ -1335,8 +1339,22 @@ function updateGridCardStatuses() {
     }
     const footer = card.querySelector('.grid-card-footer');
     if (footer && footer.children[0]) footer.children[0].textContent = status.label;
+    // Quick actions track status; only touch the DOM when the action set changed
+    // (rebuilding every tick would kill an in-flight click/focus).
+    if (footer && typeof buildQuickActionsBar === 'function') {
+      const oldBar = footer.querySelector('.quick-actions-bar');
+      const newBar = buildQuickActionsBar(sid);
+      const oldSig = oldBar?.dataset.signature || '';
+      const newSig = newBar?.dataset.signature || '';
+      if (oldSig !== newSig) {
+        if (oldBar) oldBar.remove();
+        if (newBar) footer.insertBefore(newBar, footer.lastElementChild);
+      }
+    }
     const stopBtn = card.querySelector('.grid-card-stop-btn');
     if (stopBtn) stopBtn.style.display = running ? '' : 'none';
+    if (typeof updateGridCardGitChip === 'function') updateGridCardGitChip(sid, card);
+    if (typeof updatePromptQueueBadge === 'function') updatePromptQueueBadge(sid, card);
   }
 }
 
@@ -1504,6 +1522,7 @@ function showGridView() {
   // Show grid header bar with session count
   gridViewer.style.display = 'block';
   gridViewerCount.textContent = sessionIds.length + ' session' + (sessionIds.length !== 1 ? 's' : '');
+  if (sessionIds.length === 0) showGridEmptyState();
   updateGridCollapseAllBtn();
 
   const btn = document.getElementById('grid-toggle-btn');
@@ -1531,6 +1550,21 @@ function showGridView() {
     const toFocus = activeSessionId && sessionIds.includes(activeSessionId) ? activeSessionId : sessionIds[0];
     if (toFocus) focusGridCard(toFocus, { reveal: false });
   });
+}
+
+// Friendly empty state instead of a bare black scrollport when nothing is open.
+// Removed by unwrapGridCards() on every rebuild/exit.
+function showGridEmptyState() {
+  const el = document.createElement('div');
+  el.id = 'grid-empty-state';
+  const title = document.createElement('div');
+  title.className = 'grid-empty-title';
+  title.textContent = 'No open sessions';
+  const hint = document.createElement('div');
+  hint.className = 'grid-empty-hint';
+  hint.textContent = 'Click a session in the sidebar to open it here. Sessions with a live agent appear automatically.';
+  el.append(title, hint);
+  terminalsEl.appendChild(el);
 }
 
 function updateGridColumns() {

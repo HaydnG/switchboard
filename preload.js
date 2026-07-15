@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('api', {
   getActiveSessions: () => ipcRenderer.invoke('get-active-sessions'),
   getActiveTerminals: () => ipcRenderer.invoke('get-active-terminals'),
   stopSession: (id) => ipcRenderer.invoke('stop-session', id),
+  getGitSummary: (projectPath) => ipcRenderer.invoke('get-git-summary', projectPath),
   toggleStar: (id) => ipcRenderer.invoke('toggle-star', id),
   renameSession: (id, name) => ipcRenderer.invoke('rename-session', id, name),
   archiveSession: (id, archived) => ipcRenderer.invoke('archive-session', id, archived),
