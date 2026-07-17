@@ -1603,8 +1603,15 @@ function updateGridColumns() {
 
 // initGridObservers is called from app.js after DOM refs are ready
 function initGridObservers() {
-  new ResizeObserver(updateGridColumns).observe(terminalsEl);
-  new MutationObserver(updateGridColumns).observe(terminalsEl, { childList: true });
+  let columnsUpdateFrame = null;
+  const scheduleGridColumnsUpdate = () => {
+    if (columnsUpdateFrame) return;
+    columnsUpdateFrame = requestAnimationFrame(() => {
+      columnsUpdateFrame = null;
+      updateGridColumns();
+    });
+  };
+  new ResizeObserver(scheduleGridColumnsUpdate).observe(terminalsEl);
   const resetBtn = document.getElementById('grid-reset-layout-btn');
   if (resetBtn) resetBtn.addEventListener('click', resetGridLayout);
   // The collapse-all-groups toggle now lives in the bulk-actions bar and is
