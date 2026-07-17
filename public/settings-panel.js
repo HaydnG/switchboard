@@ -332,8 +332,9 @@
             <span class="settings-label">Version</span>
             <div class="settings-description"><span id="sv-current-version"></span> <span id="sv-update-status"></span></div>
           </div>
-          <div class="settings-field-control">
+          <div class="settings-field-control settings-update-actions">
             <button class="settings-check-updates-btn" id="sv-check-updates-btn">Check for Updates</button>
+            <button class="settings-restart-update-btn" id="sv-restart-update-btn" hidden>Restart to Update</button>
           </div>
         </div>
       </div>` : ''}
@@ -489,6 +490,7 @@
 
     // Check for updates button + current version + inline status
     const checkUpdatesBtn = settingsViewerBody.querySelector('#sv-check-updates-btn');
+    const restartUpdateBtn = settingsViewerBody.querySelector('#sv-restart-update-btn');
     if (checkUpdatesBtn) {
       const updateStatusEl = settingsViewerBody.querySelector('#sv-update-status');
       window.api.getAppVersion().then(v => {
@@ -498,18 +500,48 @@
       const settingsUpdaterHandler = (type, data) => {
         if (!updateStatusEl) return;
         switch (type) {
-          case 'checking': updateStatusEl.textContent = '\u2014 checking\u2026'; break;
-          case 'update-available': updateStatusEl.textContent = `\u2014 v${data.version} available`; break;
-          case 'update-not-available': updateStatusEl.textContent = '\u2014 up to date'; break;
-          case 'download-progress': updateStatusEl.textContent = `\u2014 downloading ${Math.round(data.percent)}%`; break;
-          case 'update-downloaded': updateStatusEl.textContent = `\u2014 v${data.version} ready, restart to update`; break;
-          case 'error': updateStatusEl.textContent = '\u2014 check failed'; break;
+          case 'checking':
+            updateStatusEl.textContent = '\u2014 checking\u2026';
+            if (restartUpdateBtn) restartUpdateBtn.hidden = true;
+            break;
+          case 'update-available':
+            updateStatusEl.textContent = `\u2014 v${data.version} available`;
+            if (restartUpdateBtn) restartUpdateBtn.hidden = true;
+            break;
+          case 'update-not-available':
+            updateStatusEl.textContent = '\u2014 up to date';
+            if (restartUpdateBtn) restartUpdateBtn.hidden = true;
+            break;
+          case 'download-progress':
+            updateStatusEl.textContent = `\u2014 downloading ${Math.round(data.percent)}%`;
+            if (restartUpdateBtn) restartUpdateBtn.hidden = true;
+            break;
+          case 'update-downloaded':
+            updateStatusEl.textContent = `\u2014 v${data.version} ready`;
+            if (restartUpdateBtn) restartUpdateBtn.hidden = false;
+            break;
+          case 'error':
+            updateStatusEl.textContent = '\u2014 check failed';
+            if (restartUpdateBtn) restartUpdateBtn.hidden = true;
+            break;
         }
       };
       window.api.onUpdaterEvent(settingsUpdaterHandler);
       checkUpdatesBtn.addEventListener('click', () => {
         window.api.updaterCheck();
       });
+      if (restartUpdateBtn) {
+        restartUpdateBtn.addEventListener('click', async () => {
+          window.dispatchEvent(new CustomEvent('switchboard:save-update-restart-state'));
+          const result = await window.api.updaterInstall();
+          if (result?.ok === false) {
+            const message = result.dev
+              ? 'Update restart is only available in packaged builds.'
+              : (result.error || 'Update restart failed. Please reinstall from the releases page.');
+            window.showControlToast({ message });
+          }
+        });
+      }
     }
 
     // Remove project button

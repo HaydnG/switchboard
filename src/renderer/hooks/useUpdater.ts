@@ -6,7 +6,6 @@ import {
   type UpdaterEventData,
 } from '@renderer/types/api';
 
-const STATUS_BAR_UPDATER_ID = 'status-bar-updater';
 const UPDATE_DISMISSED_KEY = 'update-dismissed';
 
 export interface UpdateToastState {
@@ -20,6 +19,8 @@ function isDownloadedPayload(data: UpdaterEventData | undefined): data is Update
 
 export function useUpdater() {
   const [toast, setToast] = useState<UpdateToastState | null>(null);
+  const [updaterStatus, setUpdaterStatusState] = useState('');
+  const [pendingUpdate, setPendingUpdate] = useState<UpdateToastState | null>(null);
   const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const clearStatusTimer = useCallback(() => {
@@ -31,11 +32,10 @@ export function useUpdater() {
 
   const setUpdaterStatus = useCallback((text: string, durationMs?: number) => {
     clearStatusTimer();
-    const el = document.getElementById(STATUS_BAR_UPDATER_ID);
-    if (el) el.textContent = text;
+    setUpdaterStatusState(text);
     if (durationMs) {
       statusTimerRef.current = setTimeout(() => {
-        if (el) el.textContent = '';
+        setUpdaterStatusState('');
         statusTimerRef.current = null;
       }, durationMs);
     }
@@ -60,10 +60,12 @@ export function useUpdater() {
           break;
         case 'update-downloaded': {
           if (!isDownloadedPayload(data)) break;
+          const update = { version: data.version, releaseName: data.releaseName };
+          setPendingUpdate(update);
           setUpdaterStatus(`v${data.version} ready — restart to update`);
           const dismissed = localStorage.getItem(UPDATE_DISMISSED_KEY);
           if (dismissed === data.version) break;
-          setToast({ version: data.version, releaseName: data.releaseName });
+          setToast(update);
           break;
         }
         case 'error':
@@ -94,5 +96,5 @@ export function useUpdater() {
     }
   }, []);
 
-  return { toast, dismissToast, restartToUpdate };
+  return { toast, updaterStatus, pendingUpdate, dismissToast, restartToUpdate };
 }

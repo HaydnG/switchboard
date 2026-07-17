@@ -260,16 +260,27 @@ function renderGridGroupFilters(container) {
     else ungroupedCount++;
   }
 
+  if (gridGroupFilter !== 'all' && gridGroupFilter !== 'ungrouped') {
+    const activeCount = groupCounts.get(gridGroupFilter) || 0;
+    if (activeCount === 0) {
+      gridGroupFilter = 'all';
+      localStorage.setItem('gridGroupFilter', gridGroupFilter);
+    }
+  }
+
+  const options = [['all', 'All groups', openSessionList.length]];
+  for (const group of [...groupsState.groups].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))) {
+    const count = groupCounts.get(group.id) || 0;
+    if (count === 0) continue;
+    options.push([group.id, group.name, count, group.color]);
+  }
+  if (ungroupedCount > 0) options.push(['ungrouped', 'Ungrouped', ungroupedCount]);
+  if (options.length === 1) return;
+
   const divider = document.createElement('span');
   divider.className = 'grid-filter-divider';
   divider.setAttribute('aria-hidden', 'true');
   container.appendChild(divider);
-
-  const options = [['all', 'All groups', openSessionList.length]];
-  for (const group of [...groupsState.groups].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))) {
-    options.push([group.id, group.name, groupCounts.get(group.id) || 0, group.color]);
-  }
-  if (ungroupedCount > 0) options.push(['ungrouped', 'Ungrouped', ungroupedCount]);
 
   for (const [key, label, count, color] of options) {
     const btn = document.createElement('button');
@@ -285,7 +296,6 @@ function renderGridGroupFilters(container) {
     const text = document.createElement('span');
     text.textContent = `${label} ${count}`;
     btn.appendChild(text);
-    btn.disabled = key !== 'all' && count === 0;
     btn.addEventListener('click', () => {
       gridGroupFilter = key;
       localStorage.setItem('gridGroupFilter', gridGroupFilter);
