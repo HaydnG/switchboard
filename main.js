@@ -1507,8 +1507,10 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       for (const m of oscMatches) {
         const code = m[1];
         const payload = m[2].slice(0, 120);
-        // Detect Claude CLI busy state from OSC 0 title (spinner chars = busy, ✳ = idle)
-        if (code === '0') {
+        // Detect Claude CLI busy state from window-title OSC sequences. Terminals
+        // and CLI versions commonly use OSC 0, 1, or 2 for the same title.
+        // Braille spinner chars mean work is in progress; ✳ means the CLI is idle.
+        if (code === '0' || code === '1' || code === '2') {
           const firstChar = payload.charAt(0);
           const isBusy = firstChar.charCodeAt(0) >= 0x2800 && firstChar.charCodeAt(0) <= 0x28FF;
           const isIdle = firstChar === '\u2733'; // ✳
