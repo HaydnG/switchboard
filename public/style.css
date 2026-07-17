@@ -5534,6 +5534,16 @@ input:focus-visible {
 /* --- Sidebar user-group section --- */
 .user-group {
   --user-group-color: #8088ff;
+  margin: 4px 6px;
+  border: 1px solid color-mix(in srgb, var(--user-group-color, #8088ff) 16%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--user-group-color, #8088ff) 6%, transparent);
+  overflow: hidden;
+  transition: background 0.15s, border-color 0.15s;
+}
+.user-group:hover {
+  border-color: color-mix(in srgb, var(--user-group-color, #8088ff) 26%, transparent);
+  background: color-mix(in srgb, var(--user-group-color, #8088ff) 9%, transparent);
 }
 .user-group-header {
   padding: 0 9px;
