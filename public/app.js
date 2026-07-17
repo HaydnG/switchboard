@@ -282,6 +282,8 @@ const attentionSessions = new Set(); // sessions needing user action (OSC 9 or h
 const attentionReason = new Map(); // sessionId → { reason, source } — for hook>osc9 precedence
 const responseReadySessions = new Set(); // Claude finished, user hasn't looked (terminal state)
 const sessionBusyState = new Map(); // sessionId → boolean (currently active)
+const agentTaskBySession = new Map(); // sessionId → current task shown by the agent UI
+const agentTaskTimers = new Map(); // sessionId → idle timeout
 const lastActivityTime = new Map(); // sessionId → Date of last terminal output
 const lastViewedTime = new Map(); // sessionId → Date the session last became focused
 const filesTouchedSinceViewed = new Map(); // sessionId → Map<path, { at, kind }>
@@ -326,6 +328,15 @@ function refreshSessionStatusViews() {
   if (gridViewActive) refreshGridView();
   announceAttentionSummary();
   syncNativeNotifications();
+}
+
+let statusViewsRefreshFrame = null;
+function scheduleSessionStatusViewsRefresh() {
+  if (statusViewsRefreshFrame) return;
+  statusViewsRefreshFrame = requestAnimationFrame(() => {
+    statusViewsRefreshFrame = null;
+    refreshSessionStatusViews();
+  });
 }
 
 // --- Next-attention focus (shared by the inbox button and the hotkey) ---
@@ -417,7 +428,6 @@ function setActivity(sessionId, active) {
         item.classList.remove('cli-busy');
         item.classList.add('response-ready');
       }
-      refreshSessionStatusViews();
     }
     // Agent finished a turn → flush the next queued prompt (one per idle
     // transition, so each queued instruction gets its own turn).
@@ -434,7 +444,34 @@ function setActivity(sessionId, active) {
   if (wasActive !== active) {
     recordTimelineEvent(sessionId, active ? 'busy' : 'idle', active ? 'Agent working' : 'Agent idle', active ? 'Claude activity started.' : 'Claude activity stopped.');
   }
-  if (wasActive !== active) refreshSessionStatusViews();
+  if (wasActive !== active) scheduleSessionStatusViewsRefresh();
+}
+
+// OMP redraws its spinner/status line continuously while working. Treat the
+// latest matching redraw as a liveness signal so it can share Claude's Working
+// / Open status model without requiring an OSC title.
+function updateAgentTask(sessionId, task) {
+  const current = agentTaskBySession.get(sessionId) || '';
+  const next = task || '';
+  if (current !== next) {
+    if (next) agentTaskBySession.set(sessionId, next);
+    else agentTaskBySession.delete(sessionId);
+    scheduleSessionStatusViewsRefresh();
+  }
+
+  const existingTimer = agentTaskTimers.get(sessionId);
+  if (existingTimer) clearTimeout(existingTimer);
+  if (!next) {
+    agentTaskTimers.delete(sessionId);
+    return;
+  }
+
+  setActivity(sessionId, true);
+  agentTaskTimers.set(sessionId, setTimeout(() => {
+    agentTaskTimers.delete(sessionId);
+    updateAgentTask(sessionId, '');
+    setActivity(sessionId, false);
+  }, 2000));
 }
 
 // Single funnel for both attention sources (OSC-9 heuristic + Claude Code hooks).
@@ -470,6 +507,8 @@ function applyAttention(sessionId, signal) {
 function trackActivity(sessionId, data) {
   if (activityNoiseRe.test(data)) return;
   lastActivityTime.set(sessionId, new Date());
+  const agentTask = getAgentTaskFromTerminalData(data);
+  if (agentTask) updateAgentTask(sessionId, agentTask);
 }
 
 function clearUnread(sessionId) {
@@ -564,6 +603,11 @@ window.addEventListener('focus', () => setWindowFocused(true));
 window.addEventListener('blur', () => setWindowFocused(false));
 document.addEventListener('visibilitychange', () => {
   setWindowFocused(!document.hidden && document.hasFocus());
+  if (!document.hidden && typeof refreshStatusBarUsage === 'function') {
+    if (usageStatusTimer) clearTimeout(usageStatusTimer);
+    usageStatusTimer = null;
+    refreshStatusBarUsage();
+  }
 });
 
 // Clicking a native notification focuses the window and opens that session.
@@ -1250,6 +1294,14 @@ const POLL_FAST_MS = 3000;
 const POLL_IDLE_MS = 30000;
 let pollTimer = null;
 
+function haveSameSessionIds(left, right) {
+  if (left.size !== right.size) return false;
+  for (const id of left) {
+    if (!right.has(id)) return false;
+  }
+  return true;
+}
+
 function scheduleActiveSessionsPoll() {
   if (pollTimer) clearTimeout(pollTimer);
   const delay = activePtyIds.size > 0 ? POLL_FAST_MS : POLL_IDLE_MS;
@@ -1259,8 +1311,10 @@ function scheduleActiveSessionsPoll() {
 async function pollActiveSessions() {
   try {
     const ids = await window.api.getActiveSessions();
-    activePtyIds = new Set(ids);
-    updateRunningIndicators();
+    const nextActivePtyIds = new Set(ids);
+    const activeSessionsChanged = !haveSameSessionIds(activePtyIds, nextActivePtyIds);
+    activePtyIds = nextActivePtyIds;
+    if (activeSessionsChanged) updateRunningIndicators();
     updateTerminalHeader();
     // While the grid is open, keep it filled with every running session — newly
     // active sessions surface automatically (reattach only, never a new spawn).
@@ -1287,6 +1341,10 @@ function updateRunningIndicators() {
       attentionReason.delete(id);
       responseReadySessions.delete(id);
       sessionBusyState.delete(id);
+      agentTaskBySession.delete(id);
+      const taskTimer = agentTaskTimers.get(id);
+      if (taskTimer) clearTimeout(taskTimer);
+      agentTaskTimers.delete(id);
     }
     const dot = item.querySelector('.session-status-dot');
     if (dot) dot.classList.toggle('running', running);
@@ -1325,7 +1383,7 @@ scheduleActiveSessionsPoll();
 
 // Refresh sidebar timeago labels every 30s so "just now" ticks forward
 setInterval(() => {
-  if (lastActivityTime.size === 0) return;
+  if (document.hidden || lastActivityTime.size === 0) return;
   for (const [sessionId, time] of lastActivityTime) {
     const item = document.getElementById('si-' + sessionId);
     if (!item) continue;
@@ -1729,18 +1787,22 @@ async function attachRunningSession(session) {
   return true;
 }
 
-// Handle window resize
+// Resize events can fire every frame while a window is being dragged. Fit after
+// the layout settles once rather than scheduling one xterm measurement per
+// session on every native resize event.
+let resizeFitTimer = null;
 window.addEventListener('resize', () => {
-  if (gridViewActive) {
-    for (const entry of openSessions.values()) {
-      fitAndScroll(entry);
+  if (resizeFitTimer) clearTimeout(resizeFitTimer);
+  resizeFitTimer = setTimeout(() => {
+    resizeFitTimer = null;
+    if (gridViewActive) {
+      for (const entry of openSessions.values()) fitAndScroll(entry);
+      return;
     }
-    return;
-  }
-  if (activeSessionId && openSessions.has(activeSessionId)) {
-    const entry = openSessions.get(activeSessionId);
-    safeFit(entry);
-  }
+    if (activeSessionId && openSessions.has(activeSessionId)) {
+      fitAndScroll(openSessions.get(activeSessionId));
+    }
+  }, 100);
 });
 
 // --- Tab switching ---
@@ -2073,6 +2135,11 @@ function renderUsageStatus(usage) {
 
 async function refreshStatusBarUsage() {
   if (!statusBarUsage) return;
+  if (document.hidden) {
+    if (usageStatusTimer) clearTimeout(usageStatusTimer);
+    usageStatusTimer = setTimeout(refreshStatusBarUsage, 5 * 60 * 1000);
+    return;
+  }
   const retryAt = Number(localStorage.getItem(USAGE_RETRY_AT_KEY) || 0);
   if (retryAt && Date.now() < retryAt) {
     const rateLimitedUsage = {

@@ -303,7 +303,9 @@ function createTerminalEntry(session) {
   terminal.onTitleChange(title => {
     entry.ptyTitle = title;
     const agentTask = getAgentTaskFromTitle(title);
-    if (entry.agentTask !== agentTask) {
+    if (typeof updateAgentTask === 'function') {
+      updateAgentTask(entry.session.sessionId, agentTask);
+    } else if (entry.agentTask !== agentTask) {
       entry.agentTask = agentTask;
       if (typeof refreshSessionStatusViews === 'function') refreshSessionStatusViews();
     }

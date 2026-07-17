@@ -69,6 +69,18 @@
       .trim();
   }
 
+  // OMP renders the current task inside its terminal UI rather than publishing
+  // it as a window title. Strip the common terminal control sequences first,
+  // then extract its spinner + Esc-hint status line.
+  function getAgentTaskFromTerminalData(data) {
+    if (typeof data !== 'string') return '';
+    const text = data
+      .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+      .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
+    const match = /[\u2800-\u28ff]\s+(.+?)\s*⟦esc⟧/iu.exec(text);
+    return match ? match[1].trim() : '';
+  }
+
   function getSessionStatus(session, runtime = {}) {
     const sessionId = session.sessionId;
     if (hasSetValue(runtime.attentionSessions, sessionId)) return STATUS.needsAttention;
@@ -173,6 +185,7 @@
 
   return {
     getAgentTaskFromTitle,
+    getAgentTaskFromTerminalData,
     getSessionStatus,
     getAttentionInboxItems,
     getNextAttentionInboxItem,

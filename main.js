@@ -142,6 +142,29 @@ function validateShellArg(value, fieldName) {
 const activeSessions = new Map();
 let mainWindow = null;
 
+// Coalesce bursty PTY output before crossing Electron's main→renderer IPC
+// boundary. Terminal ordering is preserved per session, while the renderer's
+// existing RAF batching continues to handle xterm writes.
+function flushTerminalData(session) {
+  session._terminalDataFlushScheduled = false;
+  const chunksBySessionId = session._terminalDataChunksBySessionId;
+  session._terminalDataChunksBySessionId = new Map();
+  if (!chunksBySessionId || chunksBySessionId.size === 0 || !mainWindow || mainWindow.isDestroyed()) return;
+  for (const [sessionId, chunks] of chunksBySessionId) {
+    mainWindow.webContents.send('terminal-data', sessionId, chunks.join(''));
+  }
+}
+
+function queueTerminalData(session, sessionId, data) {
+  if (!session._terminalDataChunksBySessionId) session._terminalDataChunksBySessionId = new Map();
+  const chunks = session._terminalDataChunksBySessionId.get(sessionId) || [];
+  chunks.push(data);
+  session._terminalDataChunksBySessionId.set(sessionId, chunks);
+  if (session._terminalDataFlushScheduled) return;
+  session._terminalDataFlushScheduled = true;
+  setImmediate(() => flushTerminalData(session));
+}
+
 function createWindow() {
   // Restore saved window bounds
   const savedBounds = getSetting('global')?.windowBounds;
@@ -417,7 +440,7 @@ sessionCache.init({
     setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName,
   },
 });
-const { readSessionFileForRuntime, readFolderFromFilesystem, refreshFolder, refreshFolderForRuntime, reconcileCacheFromFilesystem,
+const { readSessionFileForRuntime, readFolderFromFilesystem, applyFolderRefreshResult, refreshFolder, refreshFolderForRuntime, reconcileCacheFromFilesystem,
         buildProjectsFromCache, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker } = sessionCache;
 
 
@@ -536,6 +559,19 @@ ipcMain.handle('remap-project', (_event, oldPath, newPath) => {
 });
 
 // --- IPC: get-projects ---
+// The renderer requests both archived and non-archived views together. Reuse a
+// short reconciliation window so those paired reads do not stat every runtime
+// folder twice while still detecting external changes promptly.
+const PROJECT_RECONCILE_DEDUP_MS = 500;
+let lastProjectReconcileAt = 0;
+
+function reconcileProjectsIfStale() {
+  const now = Date.now();
+  if (now - lastProjectReconcileAt < PROJECT_RECONCILE_DEDUP_MS) return;
+  lastProjectReconcileAt = now;
+  reconcileCacheFromFilesystem();
+}
+
 ipcMain.handle('open-external', (_event, url) => {
   log.info('[open-external IPC]', url);
   if (/^https?:\/\//i.test(url)) return shell.openExternal(url);
@@ -624,7 +660,7 @@ ipcMain.handle('get-projects', (_event, showArchived) => {
     // Pick up folders changed while the app was closed, or never indexed by an
     // older build, so sessions/worktrees don't silently go missing. Stat-gated,
     // so it's cheap when nothing has changed.
-    reconcileCacheFromFilesystem();
+    reconcileProjectsIfStale();
     return buildProjectsFromCache(showArchived);
   } catch (err) {
     console.error('Error listing projects:', err);
@@ -1585,12 +1621,11 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       }
     }
 
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('terminal-data', currentId, data);
-    }
+    queueTerminalData(session, currentId, data);
   });
 
   ptyProcess.onExit(({ exitCode }) => {
+    flushTerminalData(session);
     session.exited = true;
     // Clean up MCP server
     const mcpId = session.realSessionId || sessionId;
@@ -1675,29 +1710,53 @@ const { detectTransitionsForRuntime } = sessionTransitions;
 // --- fs.watch on agent session directories ---
 const runtimeWatchers = [];
 
+function refreshFolderInWorker(runtime, folder) {
+  return new Promise((resolve) => {
+    const worker = new Worker(path.join(__dirname, 'workers', 'refresh-folder.js'), {
+      workerData: {
+        runtimeId: runtime.id,
+        sessionsDir: runtime.sessionsDir,
+        folder,
+        cachedSessions: getCachedByFolder(folder),
+      },
+    });
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+    worker.once('message', (message) => finish(message?.ok ? message.result : null));
+    worker.once('error', () => finish(null));
+    worker.once('exit', () => finish(null));
+  });
+}
+
 function startRuntimeWatcher(runtime) {
   if (!runtime.sessionsDir || !fs.existsSync(runtime.sessionsDir)) return;
 
   const pendingFolders = new Set();
   const debounceState = { timer: null, firstPendingAt: 0, QUIET_MS: 500, MAX_WAIT_MS: 2000 };
 
-  function flushChanges() {
+  async function flushChanges() {
     debounceState.timer = null;
     debounceState.firstPendingAt = 0;
     const folders = new Set(pendingFolders);
     pendingFolders.clear();
 
     let changed = false;
-    for (const folder of folders) {
+    await Promise.all([...folders].map(async (folder) => {
       const folderPath = path.join(runtime.sessionsDir, folder);
       if (fs.existsSync(folderPath)) {
         detectTransitionsForRuntime(runtime, folder);
-        refreshFolderForRuntime(runtime, folder);
+        const result = await refreshFolderInWorker(runtime, folder);
+        if (result) applyFolderRefreshResult(result);
+        else refreshFolderForRuntime(runtime, folder); // Preserve indexing if a worker cannot start.
       } else {
         deleteCachedFolder(folder);
       }
       changed = true;
-    }
+    }));
 
     if (changed) notifyRendererProjectsChanged();
   }
@@ -1920,11 +1979,14 @@ app.on('before-quit', () => {
     tray = null;
   }
 
-  // Close filesystem watcher
-  if (projectsWatcher) {
-    projectsWatcher.close();
-    projectsWatcher = null;
+  // Close all filesystem watchers so quit does not retain file descriptors.
+  for (const watcher of runtimeWatchers.splice(0)) {
+    try { watcher.close(); } catch {}
   }
+  for (const watcher of fileWatchers.values()) {
+    try { watcher.close(); } catch {}
+  }
+  fileWatchers.clear();
 
   // Kill all PTY processes on quit
   for (const [, session] of activeSessions) {

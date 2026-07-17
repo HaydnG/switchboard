@@ -6,6 +6,7 @@ const crypto = require('crypto');
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
+const scheduleFileCache = new Map(); // filePath → { mtimeMs, schedule }
 
 /** Parse YAML-like frontmatter from a markdown file (simple key: value parser). */
 function parseFrontmatter(content) {
@@ -115,6 +116,7 @@ function readProjectPathFromJsonl(folderPath) {
 /** Scan all projects for schedule-*.md files and return parsed schedule objects. */
 function scanSchedules(log) {
   const schedules = [];
+  const seenScheduleFiles = new Set();
   try {
     if (!fs.existsSync(PROJECTS_DIR)) return schedules;
     const folders = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
@@ -138,19 +140,38 @@ function scanSchedules(log) {
         if (!fs.existsSync(commandsDir)) continue;
         const files = fs.readdirSync(commandsDir).filter(f => f.startsWith('schedule-') && f.endsWith('.md'));
         for (const file of files) {
+          const filePath = path.join(commandsDir, file);
+          seenScheduleFiles.add(filePath);
           try {
-            const content = fs.readFileSync(path.join(commandsDir, file), 'utf8');
+            const mtimeMs = fs.statSync(filePath).mtimeMs;
+            const cached = scheduleFileCache.get(filePath);
+            if (
+              cached
+              && cached.mtimeMs === mtimeMs
+              && cached.schedule.projectPath === projectPath
+              && cached.schedule.folder === folder.name
+            ) {
+              schedules.push(cached.schedule);
+              continue;
+            }
+
+            const content = fs.readFileSync(filePath, 'utf8');
             const { meta, body } = parseFrontmatter(content);
-            if (!meta.cron || !body) continue;
-            if (meta.enabled === 'false') continue;
-            schedules.push({
-              file, filePath: path.join(commandsDir, file),
+            if (!meta.cron || !body || meta.enabled === 'false') {
+              scheduleFileCache.delete(filePath);
+              continue;
+            }
+            const schedule = {
+              file, filePath,
               projectPath, folder: folder.name,
               name: meta.name || file, cron: meta.cron,
               slug: meta.slug || file.replace(/^schedule-/, '').replace(/\.md$/, ''),
               cli: meta.cli || {}, prompt: body,
-            });
+            };
+            scheduleFileCache.set(filePath, { mtimeMs, schedule });
+            schedules.push(schedule);
           } catch (err) {
+            scheduleFileCache.delete(filePath);
             if (log) log.warn(`[schedule] Failed to parse ${file}:`, err.message);
           }
         }
@@ -158,6 +179,9 @@ function scanSchedules(log) {
     }
   } catch (err) {
     if (log) log.error('[schedule] Error scanning schedules:', err);
+  }
+  for (const filePath of scheduleFileCache.keys()) {
+    if (!seenScheduleFiles.has(filePath)) scheduleFileCache.delete(filePath);
   }
   return schedules;
 }

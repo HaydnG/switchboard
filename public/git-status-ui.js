@@ -19,6 +19,7 @@ function gitPathsToPoll() {
 }
 
 async function refreshGitSummaries() {
+  if (document.hidden || !windowFocused) return;
   const paths = gitPathsToPoll();
   const now = Date.now();
   const jobs = [];
@@ -125,5 +126,9 @@ async function showGitChangedFilesDialog(sessionId) {
 function startGitPolling() {
   if (gitPollTimer) return;
   gitPollTimer = setInterval(refreshGitSummaries, GIT_POLL_INTERVAL_MS / 2);
+  window.addEventListener('focus', refreshGitSummaries);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) refreshGitSummaries();
+  });
   refreshGitSummaries();
 }
