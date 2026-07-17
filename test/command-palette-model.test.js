@@ -56,6 +56,9 @@ test('buildPaletteItems shapes session items with a truncated subtitle path and 
     kind: 'session',
     title: 'Fix flaky test',
     subtitle: 'apps/web',
+    groupColor: '',
+    statusLabel: '',
+    statusKey: 'running',
     keywords: ['running', 'claude', 'apps', 'web'],
     data: {
       sessionId: 's1',
@@ -67,6 +70,42 @@ test('buildPaletteItems shapes session items with a truncated subtitle path and 
   });
 });
 
+test('buildPaletteItems includes group name in session subtitle and keywords', () => {
+  const items = buildPaletteItems({
+    sessions: [
+      {
+        sessionId: 's1',
+        name: 'Fix flaky test',
+        projectPath: '/Users/dev/code/switchboard/apps/web',
+        status: 'running',
+        runtime: 'claude',
+        groupName: 'Checkout',
+        groupColor: '#3ecf5a',
+      },
+    ],
+  });
+
+  assert.equal(items[0].subtitle, 'Checkout · apps/web');
+  assert.equal(items[0].groupColor, '#3ecf5a');
+  assert.equal(items[0].statusKey, 'running');
+  assert.deepEqual(items[0].keywords, ['running', 'claude', 'Checkout', 'apps', 'web']);
+});
+
+test('buildPaletteItems preserves a supplied session status label', () => {
+  const [item] = buildPaletteItems({
+    sessions: [{
+      sessionId: 's1',
+      name: 'Run tests',
+      projectPath: '/repo',
+      status: 'running',
+      statusLabel: 'Running',
+    }],
+  });
+
+  assert.equal(item.statusKey, 'running');
+  assert.equal(item.statusLabel, 'Running');
+});
+
 test('buildPaletteItems keeps every segment when projectPath has fewer than two', () => {
   const items = buildPaletteItems({
     sessions: [
@@ -76,6 +115,24 @@ test('buildPaletteItems keeps every segment when projectPath has fewer than two'
 
   assert.equal(items[0].subtitle, 'repo');
   assert.deepEqual(items[0].keywords, ['idle', 'repo']);
+});
+
+test('buildPaletteItems shapes group items', () => {
+  const items = buildPaletteItems({
+    groups: [{ id: 'g1', name: 'Checkout', color: '#3ecf5a', sessionCount: 3 }],
+  });
+
+  assert.deepEqual(items, [
+    {
+      id: 'g1',
+      kind: 'group',
+      title: 'Checkout',
+      subtitle: '3 sessions',
+      groupColor: '#3ecf5a',
+      keywords: ['Checkout'],
+      data: { id: 'g1', name: 'Checkout', color: '#3ecf5a', sessionCount: 3 },
+    },
+  ]);
 });
 
 test('buildPaletteItems shapes project items', () => {
@@ -114,13 +171,14 @@ test('buildPaletteItems shapes action items with caller-supplied keywords and no
   ]);
 });
 
-test('buildPaletteItems concatenates all three kinds in order and tolerates missing lists', () => {
+test('buildPaletteItems concatenates all four kinds in order and tolerates missing lists', () => {
   const items = buildPaletteItems({
     sessions: [{ sessionId: 's1', name: 'S', projectPath: '/a/b', status: 'idle' }],
+    groups: [{ id: 'g1', name: 'G', color: '#8088ff', sessionCount: 1 }],
     actions: [{ id: 'a1', title: 'A', keywords: [] }],
   });
 
-  assert.deepEqual(items.map((item) => item.kind), ['session', 'action']);
+  assert.deepEqual(items.map((item) => item.kind), ['session', 'group', 'action']);
   assert.deepEqual(buildPaletteItems({}), []);
 });
 
@@ -171,6 +229,15 @@ test('rankPaletteItems keeps input order for tied scores (stable sort)', () => {
   ];
 
   assert.deepEqual(rankPaletteItems('widget', items).map((item) => item.id), ['a', 'b', 'c']);
+});
+
+test('rankPaletteItems matches group names from keywords', () => {
+  const items = [
+    { id: 'g1', kind: 'group', title: 'Checkout', subtitle: '2 sessions', keywords: ['Checkout'] },
+    { id: 's1', kind: 'session', title: 'Unrelated', subtitle: 'apps/web', keywords: [] },
+  ];
+
+  assert.deepEqual(rankPaletteItems('checkout', items).map((item) => item.id), ['g1']);
 });
 
 test('rankPaletteItems respects the limit option', () => {

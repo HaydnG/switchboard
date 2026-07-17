@@ -59,6 +59,45 @@ function readFolderFromFilesystem(runtime, folder) {
   return { projectPath, sessions };
 }
 
+// Apply a folder scan produced by workers/refresh-folder.js. Parsing and file
+// stats happen off the Electron main thread; SQLite/FTS writes remain here so
+// this module retains a single owner for cache mutations.
+function applyFolderRefreshResult(result) {
+  const { folder, missing, projectPath, indexMtimeMs, sessionsToUpsert = [], sessionsToDelete = [] } = result;
+  if (missing) {
+    deleteCachedFolder(folder);
+    return;
+  }
+  if (!projectPath) {
+    setFolderMeta(folder, null, indexMtimeMs);
+    return;
+  }
+
+  const searchEntriesToUpsert = [];
+  const namesToSet = [];
+  for (const session of sessionsToUpsert) {
+    const name = getMeta(session.sessionId)?.name || session.customTitle || session.aiTitle || '';
+    searchEntriesToUpsert.push({
+      id: session.sessionId,
+      type: 'session',
+      folder: session.folder,
+      title: (name ? name + ' ' : '') + session.summary,
+      body: session.textContent,
+    });
+    if (session.customTitle) namesToSet.push({ id: session.sessionId, name: session.customTitle });
+  }
+
+  if (sessionsToUpsert.length > 0) upsertCachedSessions(sessionsToUpsert);
+  for (const entry of searchEntriesToUpsert) deleteSearchSession(entry.id);
+  if (searchEntriesToUpsert.length > 0) upsertSearchEntries(searchEntriesToUpsert);
+  for (const { id, name } of namesToSet) setName(id, name);
+  for (const sessionId of sessionsToDelete) {
+    deleteCachedSession(sessionId);
+    deleteSearchSession(sessionId);
+  }
+  setFolderMeta(folder, projectPath, indexMtimeMs);
+}
+
 function refreshFolderForRuntime(runtime, folder) {
   const folderPath = path.join(sessionsDirFor(runtime), folder);
   if (!fs.existsSync(folderPath)) {
@@ -402,6 +441,7 @@ module.exports = {
   init,
   readSessionFileForRuntime,
   readFolderFromFilesystem,
+  applyFolderRefreshResult,
   refreshFolder,
   refreshFolderForRuntime,
   reconcileCacheFromFilesystem,

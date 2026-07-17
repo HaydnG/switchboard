@@ -9,11 +9,18 @@ import { useUpdater } from '@renderer/hooks/useUpdater';
  * incrementally replaces UI islands. See docs/react-migration.md.
  */
 export function App() {
-  const { toast, dismissToast, restartToUpdate } = useUpdater();
+  const { toast, updaterStatus, pendingUpdate, dismissToast, restartToUpdate } = useUpdater();
 
   return (
     <>
-      {createPortal(<StatusBar />, document.body)}
+      {createPortal(
+        <StatusBar
+          updaterStatus={updaterStatus}
+          pendingUpdate={pendingUpdate}
+          onRestart={restartToUpdate}
+        />,
+        document.body,
+      )}
       <ControlUiHost />
       {toast && (
         <UpdateToast

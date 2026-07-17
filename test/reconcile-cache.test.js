@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { Worker } = require('worker_threads');
 
 const sessionCache = require('../session-cache');
 const { getFolderIndexMtimeMs } = require('../folder-index-state');
@@ -40,6 +41,14 @@ function makeFakeDb(metaMap) {
   };
 }
 
+function refreshFolderInWorker(workerData) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(path.join(__dirname, '..', 'workers', 'refresh-folder.js'), { workerData });
+    worker.once('message', (message) => resolve(message));
+    worker.once('error', reject);
+  });
+}
+
 test('reconcileCacheFromFilesystem indexes new and stale folders but skips up-to-date ones', () => {
   const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-reconcile-'));
   try {
@@ -70,6 +79,38 @@ test('reconcileCacheFromFilesystem indexes new and stale folders but skips up-to
     assert.ok(fake.indexedFolders.has('proj-new'), 'new folder should be indexed');
     assert.ok(fake.indexedFolders.has('proj-stale'), 'stale folder (older indexMtimeMs) should be re-indexed');
     assert.ok(!fake.indexedFolders.has('proj-current'), 'up-to-date folder should be skipped');
+  } finally {
+    fs.rmSync(projectsDir, { recursive: true, force: true });
+  }
+});
+
+test('refresh-folder worker returns only changed sessions and deleted cached ids', async () => {
+  const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-refresh-worker-'));
+  try {
+    const folder = 'proj-worker';
+    writeSession(path.join(projectsDir, folder), '/tmp/proj-worker');
+    const first = await refreshFolderInWorker({
+      runtimeId: 'claude',
+      sessionsDir: projectsDir,
+      folder,
+      cachedSessions: [],
+    });
+    assert.equal(first.ok, true);
+    assert.equal(first.result.sessionsToUpsert.length, 1);
+
+    const cachedSessions = first.result.sessionsToUpsert.map(session => ({
+      sessionId: session.sessionId,
+      modified: session.modified,
+    }));
+    const second = await refreshFolderInWorker({
+      runtimeId: 'claude',
+      sessionsDir: projectsDir,
+      folder,
+      cachedSessions,
+    });
+    assert.equal(second.ok, true);
+    assert.deepEqual(second.result.sessionsToUpsert, []);
+    assert.deepEqual(second.result.sessionsToDelete, []);
   } finally {
     fs.rmSync(projectsDir, { recursive: true, force: true });
   }

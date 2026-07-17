@@ -479,10 +479,27 @@ input:focus-visible {
 }
 
 #status-bar-updater {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   white-space: nowrap;
   color: #888;
   font-style: italic;
 }
+
+#status-bar-update-restart-btn {
+  background: #8088ff;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 1px 8px;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#status-bar-update-restart-btn:hover { background: #6a72e0; }
 
 /* ========== SPRING CLEANING MODAL ========== */
 .spring-cleaning-overlay {
@@ -1098,8 +1115,9 @@ input:focus-visible {
 
 .attention-inbox-item {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 1px 7px;
+  align-items: center;
   width: 100%;
   padding: 6px 7px;
   border: 0;
@@ -1119,7 +1137,7 @@ input:focus-visible {
 
 /* Inbox status pill: geometry from .status-pill; grid placement + width here. */
 .attention-inbox-status {
-  grid-row: 1 / span 2;
+  grid-row: 1 / span 3;
   align-self: start;
   min-width: 64px;
   padding: 2px 6px;
@@ -1127,6 +1145,8 @@ input:focus-visible {
 }
 
 .attention-inbox-title {
+  grid-column: 2;
+  grid-row: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1136,7 +1156,20 @@ input:focus-visible {
   font-weight: 600;
 }
 
+.attention-inbox-task {
+  grid-column: 2;
+  grid-row: 2;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #b7b7ca;
+  font-size: 10.5px;
+}
+
 .attention-inbox-meta {
+  grid-column: 2;
+  grid-row: 3;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4748,6 +4781,30 @@ input:focus-visible {
   cursor: default;
 }
 
+.settings-update-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.settings-restart-update-btn {
+  background: #8088ff;
+  border: none;
+  color: #fff;
+  font-size: 12px;
+  padding: 6px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 600;
+  transition: background 0.15s;
+}
+
+.settings-restart-update-btn:hover { background: #6a72e0; }
+
+.settings-restart-update-btn[hidden] { display: none; }
+
 /* ========== NEW SESSION DIALOG ========== */
 .new-session-overlay {
   position: fixed;
@@ -5477,6 +5534,16 @@ input:focus-visible {
 /* --- Sidebar user-group section --- */
 .user-group {
   --user-group-color: #8088ff;
+  margin: 4px 6px;
+  border: 1px solid color-mix(in srgb, var(--user-group-color, #8088ff) 16%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--user-group-color, #8088ff) 6%, transparent);
+  overflow: hidden;
+  transition: background 0.15s, border-color 0.15s;
+}
+.user-group:hover {
+  border-color: color-mix(in srgb, var(--user-group-color, #8088ff) 26%, transparent);
+  background: color-mix(in srgb, var(--user-group-color, #8088ff) 9%, transparent);
 }
 .user-group-header {
   padding: 0 9px;
@@ -6342,10 +6409,13 @@ body.grid-dragging .grid-card-header {
   border-color: rgba(128,136,255,0.4);
 }
 
-/* Inbox rows: actions live on their own line under the title/meta column. */
+/* Inbox rows: quick actions sit on the right, vertically centered. */
 .attention-inbox-item .quick-actions-bar {
-  grid-column: 2;
-  margin-top: 3px;
+  grid-column: 3;
+  grid-row: 1 / span 3;
+  align-self: center;
+  flex-shrink: 0;
+  margin-left: 2px;
 }
 
 /* Reply composer: .popover base with accent border. */
@@ -6476,10 +6546,12 @@ body.grid-dragging .grid-card-header {
 }
 
 .command-palette-badge.kind-session { color: #9ee4ff; background: rgba(79,195,247,0.14); }
+.command-palette-badge.kind-group { color: #ffd59a; background: rgba(240,160,80,0.14); }
 .command-palette-badge.kind-project { color: #9ef0ac; background: rgba(62,207,90,0.12); }
 .command-palette-badge.kind-action { color: #c0a0ff; background: rgba(160,130,255,0.13); }
 
 .command-palette-title {
+  min-width: 0;
   color: #e0e0f0;
   font-size: 12.5px;
   font-weight: 600;
@@ -6487,6 +6559,23 @@ body.grid-dragging .grid-card-header {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+.command-palette-status {
+  flex-shrink: 0;
+  border-radius: 999px;
+  padding: 2px 6px;
+  color: #a0a0b4;
+  background: rgba(255,255,255,0.07);
+  font-size: 9.5px;
+  font-weight: 700;
+}
+
+.command-palette-status.status-running { color: #9ef0ac; background: rgba(62,207,90,0.12); }
+.command-palette-status.status-busy { color: #9ee4ff; background: rgba(79,195,247,0.14); }
+.command-palette-status.status-needs-attention { color: #ffd59a; background: rgba(240,160,80,0.14); }
+.command-palette-status.status-response-ready { color: #c0a0ff; background: rgba(160,130,255,0.13); }
+.command-palette-status.status-exited { color: #8a8aa0; background: rgba(255,255,255,0.06); }
+.command-palette-status.status-idle { color: #a0a0b4; background: rgba(255,255,255,0.07); }
 
 .command-palette-subtitle {
   margin-left: auto;
@@ -6497,6 +6586,16 @@ body.grid-dragging .grid-card-header {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.command-palette-group-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 
 .command-palette-empty {

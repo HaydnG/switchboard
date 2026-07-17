@@ -325,9 +325,16 @@ function buildAttentionInbox(projects) {
     const groupChip = group
       ? `<span class="attention-inbox-group-dot" style="background:${escapeHtml(group.color)}"></span>${escapeHtml(group.name)} · `
       : '';
+    const agentTask = agentTaskBySession.get(session.sessionId)
+      || openSessions.get(session.sessionId)?.agentTask
+      || '';
+    const taskLine = agentTask
+      ? `<span class="attention-inbox-task" title="${escapeHtml(agentTask)}">${escapeHtml(agentTask)}</span>`
+      : '';
     row.innerHTML = `
       <span class="status-pill attention-inbox-status">${escapeHtml(status.label)}</span>
       <span class="attention-inbox-title">${escapeHtml(displayName)}</span>
+      ${taskLine}
       <span class="attention-inbox-meta">${groupChip}${escapeHtml(getSessionProjectLabel(session))} · ${escapeHtml(timeStr)}</span>
     `;
     const actionsBar = typeof buildQuickActionsBar === 'function' ? buildQuickActionsBar(session.sessionId) : null;

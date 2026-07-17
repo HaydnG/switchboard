@@ -2,6 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  getAgentTaskFromTitle,
+  getAgentTaskFromTerminalData,
   getSessionStatus,
   getAttentionInboxItems,
   getNextAttentionInboxItem,
@@ -23,6 +25,30 @@ function state(overrides = {}) {
     ...overrides,
   };
 }
+
+test('extracts the active Claude task from a spinner title', () => {
+  assert.equal(
+    getAgentTaskFromTitle('⠸ Add CORS field to admin config ⟦esc⟧   '),
+    'Add CORS field to admin config',
+  );
+  assert.equal(getAgentTaskFromTitle('⠹ Check test failures'), 'Check test failures');
+});
+
+test('does not expose non-Claude terminal titles as agent tasks', () => {
+  assert.equal(getAgentTaskFromTitle('zsh — switchboard'), '');
+  assert.equal(getAgentTaskFromTitle('✳ Ready for input'), '');
+  assert.equal(getAgentTaskFromTitle(''), '');
+});
+
+test('extracts an OMP task from terminal UI output', () => {
+  const output = '\x1b[2K\r\x1b[38;5;245m⠸\x1b[0m Add CORS field to admin config \x1b[2m⟦esc⟧\x1b[0m';
+  assert.equal(getAgentTaskFromTerminalData(output), 'Add CORS field to admin config');
+});
+
+test('ignores terminal output without an OMP task line', () => {
+  assert.equal(getAgentTaskFromTerminalData('Compiling application…'), '');
+  assert.equal(getAgentTaskFromTerminalData('\x1b]0;zsh\x07'), '');
+});
 
 test('session status prioritizes needs-attention over other states', () => {
   const session = { sessionId: 's1', modified: '2026-06-12T10:00:00.000Z' };
@@ -65,6 +91,8 @@ test('session status distinguishes busy, running, exited, and idle', () => {
 
   assert.equal(getSessionStatus(busy, runtime).key, 'busy');
   assert.equal(getSessionStatus(running, runtime).key, 'running');
+  assert.equal(getSessionStatus(busy, runtime).label, 'Working');
+  assert.equal(getSessionStatus(running, runtime).label, 'Open');
   assert.equal(getSessionStatus(exited, runtime).key, 'exited');
   assert.equal(getSessionStatus(idle, runtime).key, 'idle');
 });
