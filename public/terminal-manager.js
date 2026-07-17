@@ -302,6 +302,13 @@ function createTerminalEntry(session) {
   });
   terminal.onTitleChange(title => {
     entry.ptyTitle = title;
+    const agentTask = getAgentTaskFromTitle(title);
+    if (typeof updateAgentTask === 'function') {
+      updateAgentTask(entry.session.sessionId, agentTask);
+    } else if (entry.agentTask !== agentTask) {
+      entry.agentTask = agentTask;
+      if (typeof refreshSessionStatusViews === 'function') refreshSessionStatusViews();
+    }
     if (activeSessionId === entry.session.sessionId) updatePtyTitle();
   });
   terminal.onBell(() => {

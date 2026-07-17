@@ -124,6 +124,8 @@ contextBridge.exposeInMainWorld('api', {
   watchFile: (filePath) => ipcRenderer.invoke('watch-file', filePath),
   unwatchFile: (filePath) => ipcRenderer.invoke('unwatch-file', filePath),
   onFileChanged: (callback) => {
-    ipcRenderer.on('file-changed', (_event, filePath) => callback(filePath));
+    const listener = (_event, filePath) => callback(filePath);
+    ipcRenderer.on('file-changed', listener);
+    return () => ipcRenderer.removeListener('file-changed', listener);
   },
 });

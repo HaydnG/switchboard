@@ -77,7 +77,7 @@ class ViewerPanel {
       }
     };
     if (window.api.onFileChanged) {
-      window.api.onFileChanged(this._onFileChanged);
+      this._unsubscribeFileChanged = window.api.onFileChanged(this._onFileChanged);
     }
   }
 
@@ -243,6 +243,8 @@ class ViewerPanel {
 
   destroy() {
     this._unwatchFile();
+    this._unsubscribeFileChanged?.();
+    this._unsubscribeFileChanged = null;
     if (this.editorView) {
       this.editorView.destroy();
       this.editorView = null;

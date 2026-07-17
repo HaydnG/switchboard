@@ -29,7 +29,7 @@
     },
     running: {
       key: 'running',
-      label: 'Running',
+      label: 'Open',
       className: 'status-running',
       priority: 70,
       inInbox: true,
@@ -56,6 +56,29 @@
 
   function getMapValue(mapLike, value) {
     return mapLike && typeof mapLike.get === 'function' ? mapLike.get(value) : undefined;
+  }
+
+  // Claude includes its current task in a busy window title, e.g.
+  // "⠸ Add CORS field to admin config ⟦esc⟧". Only expose titles with the
+  // braille spinner so ordinary shell/window titles are never shown as tasks.
+  function getAgentTaskFromTitle(title) {
+    if (typeof title !== 'string' || !/^[\u2800-\u28ff]/u.test(title)) return '';
+    return title
+      .replace(/^[\u2800-\u28ff]\s*/u, '')
+      .replace(/\s*⟦esc⟧\s*$/iu, '')
+      .trim();
+  }
+
+  // OMP renders the current task inside its terminal UI rather than publishing
+  // it as a window title. Strip the common terminal control sequences first,
+  // then extract its spinner + Esc-hint status line.
+  function getAgentTaskFromTerminalData(data) {
+    if (typeof data !== 'string') return '';
+    const text = data
+      .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+      .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
+    const match = /[\u2800-\u28ff]\s+(.+?)\s*⟦esc⟧/iu.exec(text);
+    return match ? match[1].trim() : '';
   }
 
   function getSessionStatus(session, runtime = {}) {
@@ -161,6 +184,8 @@
   }
 
   return {
+    getAgentTaskFromTitle,
+    getAgentTaskFromTerminalData,
     getSessionStatus,
     getAttentionInboxItems,
     getNextAttentionInboxItem,
