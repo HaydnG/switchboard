@@ -78,15 +78,41 @@
     return segments.slice(-count);
   }
 
+  function formatSessionSubtitle(session) {
+    const segments = lastPathSegments(session.projectPath, 2);
+    const pathLabel = segments.join('/');
+    if (session.groupName) {
+      return pathLabel ? `${session.groupName} · ${pathLabel}` : session.groupName;
+    }
+    return pathLabel;
+  }
+
   function sessionToItem(session) {
     const segments = lastPathSegments(session.projectPath, 2);
     return {
       id: session.sessionId,
       kind: 'session',
       title: session.name,
-      subtitle: segments.join('/'),
-      keywords: [session.status, session.runtime, ...segments].filter(Boolean),
+      subtitle: formatSessionSubtitle(session),
+      groupColor: session.groupColor || '',
+      statusLabel: session.statusLabel || '',
+      statusKey: session.status || '',
+      keywords: [session.status, session.runtime, session.groupName, ...segments].filter(Boolean),
       data: session,
+    };
+  }
+
+  function groupToItem(group) {
+    const count = Number.isFinite(group.sessionCount) ? group.sessionCount : 0;
+    const subtitle = count === 1 ? '1 session' : `${count} sessions`;
+    return {
+      id: group.id,
+      kind: 'group',
+      title: group.name,
+      subtitle,
+      groupColor: group.color || '',
+      keywords: [group.name],
+      data: group,
     };
   }
 
@@ -113,13 +139,14 @@
   }
 
   /**
-   * Flattens sessions/projects/actions into a uniform palette item shape.
-   * @param {{ sessions?: Array, projects?: Array, actions?: Array }} source
+   * Flattens sessions/groups/projects/actions into a uniform palette item shape.
+   * @param {{ sessions?: Array, groups?: Array, projects?: Array, actions?: Array }} source
    * @returns {Array<{id: string, kind: string, title: string, subtitle: string, keywords: string[], data: object}>}
    */
-  function buildPaletteItems({ sessions = [], projects = [], actions = [] } = {}) {
+  function buildPaletteItems({ sessions = [], groups = [], projects = [], actions = [] } = {}) {
     return [
       ...sessions.map(sessionToItem),
+      ...groups.map(groupToItem),
       ...projects.map(projectToItem),
       ...actions.map(actionToItem),
     ];
