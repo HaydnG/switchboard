@@ -231,6 +231,23 @@ let cachedPlans = [];
 let visibleSessionCount = 10;
 let sessionMaxAgeDays = 3;
 const pendingSessions = new Map(); // sessionId → { session, projectPath, folder }
+const recentlyExitedSessions = new Map(); // sessionId → timeout id
+const RECENT_EXIT_VISIBLE_MS = 3 * 60 * 1000;
+
+function clearRecentlyExitedSession(sessionId) {
+  const timeout = recentlyExitedSessions.get(sessionId);
+  if (timeout) clearTimeout(timeout);
+  recentlyExitedSessions.delete(sessionId);
+}
+
+function keepRecentlyExitedSessionVisible(sessionId) {
+  clearRecentlyExitedSession(sessionId);
+  const timeout = setTimeout(() => {
+    recentlyExitedSessions.delete(sessionId);
+    if (showRunningOnly) refreshSidebar();
+  }, RECENT_EXIT_VISIBLE_MS);
+  recentlyExitedSessions.set(sessionId, timeout);
+}
 
 // Bridge functions for settings-panel.js
 window._setVisibleSessionCount = (v) => { visibleSessionCount = v; };
@@ -922,6 +939,7 @@ window.api.onProcessExited((sessionId, exitCode) => {
   const session = sessionMap.get(sessionId);
   if (entry) {
     entry.closed = true;
+    keepRecentlyExitedSessionVisible(sessionId);
     recordTimelineEvent(sessionId, 'exited', 'Process exited', `Exit code ${exitCode}.`);
     // Write a visible exit banner so the user can see when the process ended
     // and read any error output it printed (claude / devbox / shell stderr).
@@ -971,6 +989,7 @@ window.api.onProcessExited((sessionId, exitCode) => {
     gridViewerCount.textContent = gridCards.size + ' session' + (gridCards.size !== 1 ? 's' : '');
   }
 
+  if (showRunningOnly) refreshSidebar();
   pollActiveSessions();
 });
 
@@ -1715,6 +1734,7 @@ if (timelineKindFilter) {
 
 async function openSession(session, customOptions) {
   const { sessionId, projectPath } = session;
+  clearRecentlyExitedSession(sessionId);
 
   // If already open, handle closed-session cleanup or just show it
   if (openSessions.has(sessionId)) {
@@ -1764,6 +1784,7 @@ async function openSession(session, customOptions) {
 // terminal entry exists. Callers batch these and trigger a single grid rebuild.
 async function attachRunningSession(session) {
   const { sessionId, projectPath } = session;
+  clearRecentlyExitedSession(sessionId);
   const existing = openSessions.get(sessionId);
   if (existing) {
     if (!existing.closed) return true; // already mounted — nothing to do

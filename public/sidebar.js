@@ -571,12 +571,16 @@ function filterSidebarSessions(sessions) {
     filtered = filtered.filter(s => !s.archived);
   }
   if (showStarredOnly) filtered = filtered.filter(s => s.starred);
-  // "Running" must match the definition used everywhere else in the sidebar
-  // (sort priority, status dots, slug/group rollups): a session counts as running
-  // if its PTY is tracked OR it's a just-spawned pending session whose PTY hasn't
-  // been polled into activePtyIds yet. Without the pendingSessions check, a brand-new
-  // session is filtered out until an unrelated re-render (e.g. toggling the filter).
-  if (showRunningOnly) filtered = filtered.filter(s => activePtyIds.has(s.sessionId) || pendingSessions.has(s.sessionId));
+  // Keep newly spawned sessions visible until their PTY is polled, and retain a
+  // just-exited session briefly so its exit state can be seen before the active
+  // filter hides it.
+  if (showRunningOnly) {
+    filtered = filtered.filter(session => (
+      activePtyIds.has(session.sessionId)
+      || pendingSessions.has(session.sessionId)
+      || recentlyExitedSessions.has(session.sessionId)
+    ));
+  }
   if (showTodayOnly) {
     const now = new Date();
     const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -613,11 +617,7 @@ function sidebarGroupVisibilityOptions() {
 function processProjectSessions(project, resort) {
     let filtered = filterSidebarSessions(project.sessions);
     const anyFilterActive = showStarredOnly || showRunningOnly || showTodayOnly || searchMatchIds !== null;
-    const hasAssignedUserGroups = showRunningOnly
-      && typeof projectHasAssignedUserGroups === 'function'
-      && typeof groupsState !== 'undefined'
-      && projectHasAssignedUserGroups(groupsState, project.sessions, sidebarGroupVisibilityOptions());
-    if (filtered.length === 0 && !project._projectMatchedOnly && (project.sessions.length > 0 || anyFilterActive) && !hasAssignedUserGroups) return null;
+    if (filtered.length === 0 && !project._projectMatchedOnly && (project.sessions.length > 0 || anyFilterActive)) return null;
 
     filtered = sortSidebarSessions(filtered);
 
@@ -629,19 +629,8 @@ function processProjectSessions(project, resort) {
     let groupUngrouped;
     if (typeof groupSessions === 'function' && typeof groupsState !== 'undefined') {
       const partitioned = groupSessions(groupsState, filtered);
-      if (showRunningOnly && typeof expandUserGroupsForRunningFilter === 'function') {
-        const expanded = expandUserGroupsForRunningFilter(
-          groupsState,
-          project.sessions,
-          partitioned.grouped,
-          sidebarGroupVisibilityOptions(),
-        );
-        userGroups = expanded.grouped;
-        groupUngrouped = filtered.filter(s => !expanded.assignedSessionIds.has(s.sessionId));
-      } else {
-        userGroups = partitioned.grouped;
-        groupUngrouped = partitioned.ungrouped;
-      }
+      userGroups = partitioned.grouped;
+      groupUngrouped = partitioned.ungrouped;
     } else {
       userGroups = [];
       groupUngrouped = filtered;
@@ -671,16 +660,8 @@ function processProjectSessions(project, resort) {
       allItems.push({ sortTime: mostRecentTime, pinned: hasPinned, running: hasRunning, element });
     }
     for (const { group, sessions } of userGroups) {
-      // Don't render empty group sections unless "running only" is keeping them
-      // visible so the user can start a new session after stopping all members.
-      if ((!sessions || sessions.length === 0) && !showRunningOnly) continue;
-      const assignedInProject = (typeof filterSessionsForGroupVisibility === 'function' && typeof groupsState !== 'undefined')
-        ? filterSessionsForGroupVisibility(project.sessions, sidebarGroupVisibilityOptions())
-            .filter(s => groupsState.assignments?.[s.sessionId] === group.id)
-        : (sessions || []);
-      if (assignedInProject.length === 0) continue;
-      const timingSessions = (sessions && sessions.length > 0) ? sessions : assignedInProject;
-      const mostRecentTime = Math.max(...timingSessions.map(s => new Date(s.modified).getTime()));
+      if (!sessions || sessions.length === 0) continue;
+      const mostRecentTime = Math.max(...sessions.map(s => new Date(s.modified).getTime()));
       const hasRunning = sessions.some(s => activePtyIds.has(s.sessionId) || pendingSessions.has(s.sessionId));
       const hasPinned = sessions.some(s => s.starred);
       allItems.push({ sortTime: mostRecentTime, pinned: hasPinned, running: hasRunning, element: buildUserGroup(group, sessions) });
@@ -1024,17 +1005,10 @@ function renderProjectsFolderFirst(projects, resort) {
   const projectMissing = new Map();
   const projectRecency = new Map();
 
-  const groupVisibilityOptions = sidebarGroupVisibilityOptions();
   for (const project of projects) {
     projectMissing.set(project.projectPath, !!project.missing);
     let filtered = filterSidebarSessions(project.sessions);
-    const visibleForGroups = typeof filterSessionsForGroupVisibility === 'function'
-      ? filterSessionsForGroupVisibility(project.sessions, groupVisibilityOptions)
-      : project.sessions;
-    const hasAssignedUserGroups = showRunningOnly
-      && typeof projectHasAssignedUserGroups === 'function'
-      && projectHasAssignedUserGroups(groupsState, project.sessions, groupVisibilityOptions);
-    if (filtered.length === 0 && !hasAssignedUserGroups) continue;
+    if (filtered.length === 0) continue;
     filtered = sortSidebarSessions(filtered);
     for (const session of filtered) {
       const t = new Date(session.modified).getTime();
@@ -1047,14 +1021,6 @@ function renderProjectsFolderFirst(projects, resort) {
       } else {
         if (!ungroupedByProject.has(project.projectPath)) ungroupedByProject.set(project.projectPath, []);
         ungroupedByProject.get(project.projectPath).push(session);
-      }
-    }
-    if (showRunningOnly) {
-      for (const session of visibleForGroups) {
-        const gid = assignments[session.sessionId];
-        if (!gid || !groupIds.has(gid)) continue;
-        const bucket = folderBuckets.get(gid);
-        if (!bucket.has(project.projectPath)) bucket.set(project.projectPath, []);
       }
     }
   }
