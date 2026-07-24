@@ -302,6 +302,7 @@ const sessionBusyState = new Map(); // sessionId → boolean (currently active)
 const agentTaskBySession = new Map(); // sessionId → current task shown by the agent UI
 const agentTaskTimers = new Map(); // sessionId → idle timeout
 const lastActivityTime = new Map(); // sessionId → Date of last terminal output
+const inboxArrivalTime = new Map(); // sessionId → timestamp of its current actionable state
 const lastViewedTime = new Map(); // sessionId → Date the session last became focused
 const filesTouchedSinceViewed = new Map(); // sessionId → Map<path, { at, kind }>
 const sessionTimelineStore = createTimelineStore();
@@ -365,6 +366,7 @@ function statusRuntime() {
     sessionBusyState,
     openSessions,
     lastActivityTime,
+    inboxArrivalTime,
     activeSessionId,
   };
 }
@@ -439,6 +441,7 @@ function setActivity(sessionId, active) {
     // Activity ended → response-ready if user isn't looking at this session
     if (sessionId !== activeSessionId) {
       responseReadySessions.add(sessionId);
+      inboxArrivalTime.set(sessionId, Date.now());
       recordTimelineEvent(sessionId, 'response-ready', 'Ready for review', 'Agent stopped producing output while this session was not focused.');
       const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
       if (item) {
@@ -505,6 +508,7 @@ function applyAttention(sessionId, signal) {
     const wasAttention = attentionSessions.has(sessionId);
     const prevAttention = new Set(attentionSessions);
     attentionSessions.add(sessionId);
+    if (!wasAttention) inboxArrivalTime.set(sessionId, Date.now());
     recordTimelineEvent(sessionId, 'needs-attention', 'Needs human attention', winner.reason);
     const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
     if (item) item.classList.add('needs-attention');
@@ -530,6 +534,7 @@ function trackActivity(sessionId, data) {
 
 function clearUnread(sessionId) {
   const changed = responseReadySessions.delete(sessionId);
+  if (changed && !attentionSessions.has(sessionId)) inboxArrivalTime.delete(sessionId);
   const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
   if (item) {
     item.classList.remove('response-ready');
@@ -544,6 +549,7 @@ function clearNotifications(sessionId) {
   handleSessionViewed(sessionId);
   clearUnread(sessionId);
   const changed = attentionSessions.delete(sessionId);
+  if (changed && !responseReadySessions.has(sessionId)) inboxArrivalTime.delete(sessionId);
   attentionReason.delete(sessionId);
   const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
   if (item) item.classList.remove('needs-attention');
@@ -873,6 +879,7 @@ window.api.onSessionDetected((tempId, realId) => {
   sessionMap.delete(tempId);
   sessionMap.set(realId, entry.session);
   rekeySessionGroupAssignment(tempId, realId);
+  if (typeof rekeyGridSessionState === 'function') rekeyGridSessionState(tempId, realId);
 
   terminalHeaderId.textContent = realId;
   terminalHeaderName.textContent = 'New session';
@@ -918,6 +925,7 @@ window.api.onSessionForked((oldId, newId) => {
   sessionMap.delete(oldId);
   sessionMap.set(newId, entry.session);
   rekeySessionGroupAssignment(oldId, newId);
+  if (typeof rekeyGridSessionState === 'function') rekeyGridSessionState(oldId, newId);
 
   terminalHeaderId.textContent = newId;
   applyRuntimeLabel(terminalHeaderRuntime, entry.session.runtime);
@@ -1359,6 +1367,7 @@ function updateRunningIndicators() {
       attentionSessions.delete(id);
       attentionReason.delete(id);
       responseReadySessions.delete(id);
+      inboxArrivalTime.delete(id);
       sessionBusyState.delete(id);
       agentTaskBySession.delete(id);
       const taskTimer = agentTaskTimers.get(id);

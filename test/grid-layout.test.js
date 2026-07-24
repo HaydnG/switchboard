@@ -6,6 +6,7 @@ const {
   calculateGridColumnCount,
   normalizeSpan,
   applyLayout,
+  rekeyLayoutEntry,
   reorder,
 } = require('../public/grid-layout');
 
@@ -52,6 +53,25 @@ test('applyLayout clamps persisted spans against fewer available columns', () =>
   assert.equal(result[0].colSpan, 2); // clamped from 3 to maxCols=2
   assert.equal(result[0].rowSpan, 2);
   assert.equal(result[1].colSpan, 2);
+});
+
+test('rekeyLayoutEntry preserves a session layout across an ID handover', () => {
+  const layout = {
+    temporary: { order: 4, colSpan: 2, rowSpan: 3 },
+    other: { order: 1, colSpan: 1, rowSpan: 1 },
+  };
+
+  assert.equal(rekeyLayoutEntry(layout, 'temporary', 'real'), true);
+  assert.equal(layout.temporary, undefined);
+  assert.deepEqual(layout.real, { order: 4, colSpan: 2, rowSpan: 3 });
+  assert.deepEqual(applyLayout(['real', 'other'], layout, 2).map(entry => entry.sessionId), ['other', 'real']);
+});
+
+test('rekeyLayoutEntry ignores missing or unchanged IDs', () => {
+  const layout = { existing: { order: 0, colSpan: 1, rowSpan: 1 } };
+  assert.equal(rekeyLayoutEntry(layout, 'missing', 'real'), false);
+  assert.equal(rekeyLayoutEntry(layout, 'existing', 'existing'), false);
+  assert.deepEqual(layout, { existing: { order: 0, colSpan: 1, rowSpan: 1 } });
 });
 
 test('applyLayout sorts by persisted order and preserves it', () => {

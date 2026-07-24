@@ -21,6 +21,7 @@ function state(overrides = {}) {
     sessionBusyState: new Map(),
     openSessions: new Map(),
     lastActivityTime: new Map(),
+    inboxArrivalTime: new Map(),
     activeSessionId: null,
     ...overrides,
   };
@@ -111,6 +112,28 @@ test('attention inbox orders human-critical sessions first then recent activity'
   }));
 
   assert.deepEqual(result.map(item => item.session.sessionId), ['attention', 'ready', 'running-old']);
+});
+
+test('attention inbox keeps actionable sessions ordered by arrival, not terminal activity', () => {
+  const sessions = [
+    { sessionId: 'first', modified: '2026-06-12T09:00:00.000Z' },
+    { sessionId: 'second', modified: '2026-06-12T10:00:00.000Z' },
+  ];
+  const result = getAttentionInboxItems(sessions, state({
+    attentionSessions: new Set(['first', 'second']),
+    // `first` emitted more output later, but it should not displace the newer
+    // actionable card that arrived after it.
+    lastActivityTime: new Map([
+      ['first', new Date('2026-06-12T12:00:00.000Z')],
+      ['second', new Date('2026-06-12T11:00:00.000Z')],
+    ]),
+    inboxArrivalTime: new Map([
+      ['first', Date.parse('2026-06-12T10:30:00.000Z')],
+      ['second', Date.parse('2026-06-12T11:30:00.000Z')],
+    ]),
+  }));
+
+  assert.deepEqual(result.map(item => item.session.sessionId), ['second', 'first']);
 });
 
 test('next attention inbox item cycles after the current session', () => {

@@ -70,6 +70,7 @@ function performQuickAction(sessionId, action, anchor) {
   // Optimistic: the prompt was answered. If the agent is still blocked, the
   // hook/OSC attention source re-flags the session on its next signal.
   attentionSessions.delete(sessionId);
+  if (!responseReadySessions.has(sessionId)) inboxArrivalTime.delete(sessionId);
   attentionReason.delete(sessionId);
   const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
   if (item) item.classList.remove('needs-attention');
