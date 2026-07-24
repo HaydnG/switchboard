@@ -58,6 +58,18 @@
     }));
   }
 
+  // Move a persisted layout entry when a runtime replaces Switchboard's
+  // temporary session ID with the ID written to its session file.
+  function rekeyLayoutEntry(layoutMap, oldId, newId) {
+    if (!layoutMap || typeof layoutMap !== 'object' || !oldId || !newId || oldId === newId) {
+      return false;
+    }
+    if (!Object.prototype.hasOwnProperty.call(layoutMap, oldId)) return false;
+    layoutMap[newId] = layoutMap[oldId];
+    delete layoutMap[oldId];
+    return true;
+  }
+
   // Move `fromId` to sit immediately before `toId` in the ordered list. Returns a
   // new array; no-ops (returns a copy of the input) when either id is unknown or
   // the two ids are identical.
@@ -80,6 +92,7 @@
     calculateGridColumnCount,
     normalizeSpan,
     applyLayout,
+    rekeyLayoutEntry,
     reorder,
   };
 });

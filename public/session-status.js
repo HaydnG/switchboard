@@ -101,13 +101,23 @@
     return Number.isFinite(time) ? time : 0;
   }
 
+  // Inbox order is established when a session enters an actionable state, not
+  // whenever it emits terminal output. Agents can keep repainting after asking
+  // for input, so activity time would otherwise make cards swap places.
+  function inboxArrivalTime(session, runtime = {}) {
+    const arrival = getMapValue(runtime.inboxArrivalTime, session.sessionId);
+    const time = arrival instanceof Date ? arrival.getTime() : Number(arrival);
+    return Number.isFinite(time) ? time : sessionActivityTime(session, runtime);
+  }
+
   function getAttentionInboxItems(sessions, runtime = {}) {
     return sessions
       .map(session => ({ session, status: getSessionStatus(session, runtime) }))
       .filter(item => item.status.inInbox)
       .sort((a, b) => {
         if (a.status.priority !== b.status.priority) return b.status.priority - a.status.priority;
-        return sessionActivityTime(b.session, runtime) - sessionActivityTime(a.session, runtime);
+        const order = inboxArrivalTime(b.session, runtime) - inboxArrivalTime(a.session, runtime);
+        return order || a.session.sessionId.localeCompare(b.session.sessionId);
       });
   }
 

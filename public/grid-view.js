@@ -22,6 +22,37 @@ let gridInteracting = false;
 let gridLayout = loadGridLayout();
 const gridFitTimers = new Map(); // sessionId → debounce timer for fitAndScroll
 
+function gridSessionIdForCard(card, fallback) {
+  return card?.dataset.sessionId || fallback;
+}
+
+// Move renderer-only grid state when a runtime replaces its temporary session
+// ID with the ID recorded in its first session file. Keeping the card map and
+// layout keyed to the same ID avoids a teardown/rebuild that would otherwise
+// reset the card's position and span.
+function rekeyGridSessionState(oldId, newId) {
+  if (!oldId || !newId || oldId === newId) return;
+
+  const layoutChanged = rekeyLayoutEntry(gridLayout, oldId, newId);
+
+  const card = gridCards.get(oldId);
+  if (card) {
+    gridCards.delete(oldId);
+    card.dataset.sessionId = newId;
+    gridCards.set(newId, card);
+  }
+
+  const fitTimer = gridFitTimers.get(oldId);
+  if (fitTimer) {
+    clearTimeout(fitTimer);
+    gridFitTimers.delete(oldId);
+    debouncedFit(newId);
+  }
+
+  if (gridFocusedSessionId === oldId) gridFocusedSessionId = newId;
+  if (layoutChanged) saveGridLayout();
+}
+
 function loadGridLayout() {
   try {
     const parsed = JSON.parse(localStorage.getItem('gridLayout') || '{}');
@@ -497,6 +528,14 @@ function wrapInGridCard(sessionId, parent, layout) {
   card.dataset.rowSpan = rowSpan;
   card.style.gridColumn = `span ${colSpan}`;
   card.style.gridRow = `span ${rowSpan}`;
+  const previousLayout = gridLayout[sessionId] || {};
+  gridLayout[sessionId] = {
+    order: Number.isFinite(previousLayout.order)
+      ? previousLayout.order
+      : (Number.isFinite(layout?.order) ? layout.order : 0),
+    colSpan,
+    rowSpan,
+  };
 
   // Header
   const header = document.createElement('div');
@@ -520,7 +559,7 @@ function wrapInGridCard(sessionId, parent, layout) {
     healthChip.title = 'Create handoff';
     healthChip.addEventListener('click', (e) => {
       e.stopPropagation();
-      showHandoffPrompt(session);
+      showHandoffPrompt(sessionMap.get(gridSessionIdForCard(card, sessionId)) || session);
     });
     header.appendChild(healthChip);
   }
@@ -538,11 +577,11 @@ function wrapInGridCard(sessionId, parent, layout) {
   snapBtn.innerHTML = '<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="1.5" width="13" height="13" rx="2"/><line x1="8" y1="1.5" x2="8" y2="14.5"/><line x1="1.5" y1="8" x2="14.5" y2="8"/></svg>';
   snapBtn.onclick = (e) => {
     e.stopPropagation();
-    toggleSnapLayoutPopover(sessionId, card, snapBtn);
+    toggleSnapLayoutPopover(gridSessionIdForCard(card, sessionId), card, snapBtn);
   };
   // Hover-open with an intent delay (gated to fine/hover pointers inside the
   // scheduler); moving onto the popover keeps it open.
-  snapBtn.addEventListener('mouseenter', () => scheduleSnapHoverOpen(sessionId, card, snapBtn));
+  snapBtn.addEventListener('mouseenter', () => scheduleSnapHoverOpen(gridSessionIdForCard(card, sessionId), card, snapBtn));
   snapBtn.addEventListener('mouseleave', () => scheduleSnapHoverClose());
   header.appendChild(snapBtn);
 
@@ -553,7 +592,7 @@ function wrapInGridCard(sessionId, parent, layout) {
   stopBtn.style.display = activePtyIds.has(sessionId) ? '' : 'none';
   stopBtn.onclick = (e) => {
     e.stopPropagation();
-    confirmAndStopSession(sessionId);
+    confirmAndStopSession(gridSessionIdForCard(card, sessionId));
   };
   header.appendChild(stopBtn);
 
@@ -588,19 +627,19 @@ function wrapInGridCard(sessionId, parent, layout) {
   const focusFromCardChrome = (e) => {
     if (e?.target?.closest?.('button')) return;
     e.stopPropagation();
-    focusGridCard(sessionId);
+    focusGridCard(gridSessionIdForCard(card, sessionId));
   };
   header.addEventListener('mousedown', focusFromCardChrome);
   makeButtonLike(header, focusFromCardChrome, `Focus ${displayName}`);
 
   // Drag-to-reorder / drag-into-group via the header (single shared drag system).
-  header.addEventListener('pointerdown', (e) => startCardDrag(sessionId, card, e));
+  header.addEventListener('pointerdown', (e) => startCardDrag(gridSessionIdForCard(card, sessionId), card, e));
   // Resize via the corner handle.
-  resizeHandle.addEventListener('pointerdown', (e) => startCardResize(sessionId, card, e));
+  resizeHandle.addEventListener('pointerdown', (e) => startCardResize(gridSessionIdForCard(card, sessionId), card, e));
   // Double-click header to switch to full terminal view
   header.addEventListener('dblclick', (e) => {
     e.stopPropagation();
-    gridFocusedSessionId = sessionId;
+    gridFocusedSessionId = gridSessionIdForCard(card, sessionId);
     toggleGridView();
   });
   footer.addEventListener('mousedown', focusFromCardChrome);
@@ -608,8 +647,9 @@ function wrapInGridCard(sessionId, parent, layout) {
 
   // Clicking/focusing the terminal area also selects the card
   entry.element.addEventListener('focusin', () => {
-    if (gridViewActive && gridFocusedSessionId !== sessionId) {
-      focusGridCard(sessionId);
+    const cardSessionId = gridSessionIdForCard(card, sessionId);
+    if (gridViewActive && gridFocusedSessionId !== cardSessionId) {
+      focusGridCard(cardSessionId);
     }
   });
 
@@ -652,8 +692,8 @@ function persistGridOrder() {
     const prev = gridLayout[sid] || {};
     gridLayout[sid] = {
       order,
-      colSpan: Number(prev.colSpan) || Number(card.dataset.colSpan) || 1,
-      rowSpan: Number(prev.rowSpan) || Number(card.dataset.rowSpan) || 1,
+      colSpan: Number(card.dataset.colSpan) || Number(prev.colSpan) || 1,
+      rowSpan: Number(card.dataset.rowSpan) || Number(prev.rowSpan) || 1,
     };
     order++;
   }
@@ -1534,6 +1574,7 @@ function showGridView() {
   gridViewerCount.textContent = sessionIds.length + ' session' + (sessionIds.length !== 1 ? 's' : '');
   if (sessionIds.length === 0) showGridEmptyState();
   updateGridCollapseAllBtn();
+  saveGridLayout();
 
   const btn = document.getElementById('grid-toggle-btn');
   if (btn) {
@@ -1580,6 +1621,27 @@ function showGridEmptyState() {
 function updateGridColumns() {
   if (!gridViewActive) return;
   const width = terminalsEl.clientWidth;
+  const refitSessionIds = [];
+  let layoutChanged = false;
+  const normalizeRenderedCardSpans = (container, maxCols) => {
+    for (const card of container.querySelectorAll('.grid-card')) {
+      const sessionId = card.dataset.sessionId;
+      if (!sessionId) continue;
+      const span = normalizeSpan({
+        cols: card.dataset.colSpan,
+        rows: card.dataset.rowSpan,
+      }, maxCols);
+      const stored = gridLayout[sessionId] || {};
+      const domMatches = Number(card.dataset.colSpan) === span.cols &&
+        Number(card.dataset.rowSpan) === span.rows;
+      const layoutMatches = Number(stored.colSpan) === span.cols &&
+        Number(stored.rowSpan) === span.rows;
+      if (domMatches && layoutMatches) continue;
+      writeCardSpan(sessionId, card, span);
+      layoutChanged = true;
+      refitSessionIds.push(sessionId);
+    }
+  };
 
   // Grouped layout: each region container holds its own card grid.
   if (terminalsEl.classList.contains('grid-grouped')) {
@@ -1590,15 +1652,19 @@ function updateGridColumns() {
       const cols = calculateGridColumnCount({ width, cardCount });
       cardsEl.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
       cardsEl.classList.toggle('grid-single-card', cardCount === 1);
+      normalizeRenderedCardSpans(cardsEl, cols);
     }
-    return;
+  } else {
+    const cardCount = terminalsEl.querySelectorAll('.grid-card').length;
+    const cols = calculateGridColumnCount({ width, cardCount });
+    terminalsEl.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+    terminalsEl.classList.toggle('grid-few-cards', cardCount > 0 && cardCount <= 2);
+    terminalsEl.classList.toggle('grid-single-card', cardCount === 1);
+    normalizeRenderedCardSpans(terminalsEl, cols);
   }
 
-  const cardCount = terminalsEl.querySelectorAll('.grid-card').length;
-  const cols = calculateGridColumnCount({ width, cardCount });
-  terminalsEl.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
-  terminalsEl.classList.toggle('grid-few-cards', cardCount > 0 && cardCount <= 2);
-  terminalsEl.classList.toggle('grid-single-card', cardCount === 1);
+  if (layoutChanged) saveGridLayout();
+  for (const sessionId of refitSessionIds) debouncedFit(sessionId);
 }
 
 // initGridObservers is called from app.js after DOM refs are ready
