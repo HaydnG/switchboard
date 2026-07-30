@@ -13,7 +13,10 @@ export function formatControlDialogDetails(
   if (!details) return [];
   if (Array.isArray(details)) {
     return details
-      .filter((item) => item && item.value !== undefined && item.value !== null && String(item.value) !== '')
+      .filter(
+        (item) =>
+          item && item.value !== undefined && item.value !== null && String(item.value) !== '',
+      )
       .map((item) => ({ label: String(item.label || ''), value: String(item.value) }));
   }
   return Object.entries(details)

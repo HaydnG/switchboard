@@ -48,6 +48,102 @@ function getAllRenderableSessions(projects) {
   return [...sessionsById.values()];
 }
 
+const sidebarSelectedSessionIds = new Set();
+
+function clearSidebarSelection() {
+  sidebarSelectedSessionIds.clear();
+  sidebarContent.querySelectorAll('.session-item.bulk-selected').forEach(item => {
+    item.classList.remove('bulk-selected');
+    item.setAttribute('aria-selected', 'false');
+  });
+  document.querySelector('.sidebar-selection-bar')?.remove();
+}
+
+function renderSidebarSelectionBar() {
+  document.querySelector('.sidebar-selection-bar')?.remove();
+  if (sidebarSelectedSessionIds.size === 0) return;
+
+  const bar = document.createElement('div');
+  bar.className = 'sidebar-selection-bar';
+  bar.setAttribute('role', 'toolbar');
+  bar.setAttribute('aria-label', 'Selected session actions');
+
+  const count = document.createElement('strong');
+  count.textContent = `${sidebarSelectedSessionIds.size} selected`;
+
+  const groupSelect = document.createElement('select');
+  groupSelect.className = 'sidebar-selection-group';
+  groupSelect.setAttribute('aria-label', 'Move selected sessions to group');
+  groupSelect.innerHTML = '<option value="">Move to group…</option><option value="__none__">Ungroup</option>';
+  for (const group of [...(groupsState?.groups || [])].sort(
+    (left, right) => (left.order ?? 0) - (right.order ?? 0),
+  )) {
+    const option = document.createElement('option');
+    option.value = group.id;
+    option.textContent = group.name;
+    groupSelect.appendChild(option);
+  }
+  groupSelect.onchange = () => {
+    const groupId = groupSelect.value === '__none__' ? null : groupSelect.value;
+    if (groupSelect.value) {
+      for (const sessionId of sidebarSelectedSessionIds) {
+        assignSessionToGroup(sessionId, groupId);
+      }
+      clearSidebarSelection();
+    }
+  };
+
+  const archive = document.createElement('button');
+  archive.type = 'button';
+  archive.className = 'sidebar-selection-archive';
+  archive.textContent = 'Archive';
+  archive.onclick = async () => {
+    const sessions = [...sidebarSelectedSessionIds]
+      .map(sessionId => sessionMap.get(sessionId))
+      .filter(Boolean);
+    const confirmed = await showControlDialog({
+      title: 'Archive Selected Sessions',
+      message: 'Running selections will be stopped first. Session files are not deleted.',
+      confirmLabel: `Archive ${sessions.length}`,
+      tone: 'warning',
+      details: {
+        Sessions: sessions.length,
+        Running: sessions.filter(session => activePtyIds.has(session.sessionId)).length,
+      },
+    });
+    if (!confirmed) return;
+    for (const session of sessions) {
+      if (activePtyIds.has(session.sessionId)) await window.api.stopSession(session.sessionId);
+      await window.api.archiveSession(session.sessionId, 1);
+      session.archived = 1;
+    }
+    clearSidebarSelection();
+    await loadProjects();
+    showControlToast({ message: `${sessions.length} sessions archived.` });
+  };
+
+  const clear = document.createElement('button');
+  clear.type = 'button';
+  clear.className = 'sidebar-selection-clear';
+  clear.textContent = 'Clear';
+  clear.onclick = clearSidebarSelection;
+
+  bar.append(count, groupSelect, archive, clear);
+  document.getElementById('sidebar')?.appendChild(bar);
+}
+
+function toggleSidebarSelection(sessionId) {
+  if (sidebarSelectedSessionIds.has(sessionId)) sidebarSelectedSessionIds.delete(sessionId);
+  else sidebarSelectedSessionIds.add(sessionId);
+  const item = document.getElementById(`si-${sessionId}`);
+  item?.classList.toggle('bulk-selected', sidebarSelectedSessionIds.has(sessionId));
+  item?.setAttribute(
+    'aria-selected',
+    sidebarSelectedSessionIds.has(sessionId) ? 'true' : 'false',
+  );
+  renderSidebarSelectionBar();
+}
+
 function shortSessionLabel(session) {
   return cleanDisplayName(session.name || session.aiTitle || session.summary) || session.sessionId;
 }
@@ -1413,6 +1509,11 @@ function rebindSidebarEvents(projects) {
 
     const openSessionFromRow = (e) => {
       if (e?.target?.closest?.('.session-actions, .session-pin, .session-health-chip')) return;
+      if (e?.shiftKey || e?.metaKey || e?.ctrlKey) {
+        e.preventDefault();
+        toggleSidebarSelection(session.sessionId);
+        return;
+      }
       openSession(session);
     };
     item.onclick = openSessionFromRow;
@@ -1420,7 +1521,10 @@ function rebindSidebarEvents(projects) {
 
     // Drag a session row onto a group folder to assign it (property assignment
     // rather than addEventListener so morphdom-reused rows don't stack handlers).
-    item.onpointerdown = (e) => startSidebarSessionDrag(session, item, e);
+    item.onpointerdown = (e) => {
+      if (e.shiftKey || e.metaKey || e.ctrlKey) return;
+      startSidebarSessionDrag(session, item, e);
+    };
 
     const pin = item.querySelector('.session-pin');
     if (pin) {
@@ -1461,6 +1565,22 @@ function rebindSidebarEvents(projects) {
         showHandoffPrompt(session);
       };
     });
+
+    const annotationsBtn = item.querySelector('.session-annotations-btn');
+    if (annotationsBtn) {
+      annotationsBtn.onclick = (e) => {
+        e.stopPropagation();
+        showSessionAnnotationsDialog(session);
+      };
+    }
+
+    const transferBtn = item.querySelector('.session-transfer-btn');
+    if (transferBtn) {
+      transferBtn.onclick = (e) => {
+        e.stopPropagation();
+        showContextTransferDialog(session);
+      };
+    }
 
     const forkBtn = item.querySelector('.session-fork-btn');
     if (forkBtn) {
@@ -1609,6 +1729,12 @@ function buildSessionItem(session) {
   if (attentionSessions.has(session.sessionId)) item.classList.add('needs-attention');
   if (responseReadySessions.has(session.sessionId)) item.classList.add('response-ready');
   if (sessionBusyState.get(session.sessionId)) item.classList.add('cli-busy');
+  if (sidebarSelectedSessionIds.has(session.sessionId)) {
+    item.classList.add('bulk-selected');
+    item.setAttribute('aria-selected', 'true');
+  } else {
+    item.setAttribute('aria-selected', 'false');
+  }
   item.dataset.sessionId = session.sessionId;
 
   const modified = lastActivityTime.get(session.sessionId) || new Date(session.modified);
@@ -1754,11 +1880,23 @@ function buildSessionItem(session) {
   handoffBtn.title = 'Create handoff';
   handoffBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7h8"/><path d="M8 11h8"/><path d="M8 15h5"/><path d="M5 3h14a2 2 0 0 1 2 2v14l-4-3H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/></svg>';
 
+  const annotationsBtn = document.createElement('button');
+  annotationsBtn.className = 'session-annotations-btn';
+  annotationsBtn.title = 'Notes and tags';
+  annotationsBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h6M8 17h4"/></svg>';
+
+  const transferBtn = document.createElement('button');
+  transferBtn.className = 'session-transfer-btn';
+  transferBtn.title = 'Send context';
+  transferBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13"/><path d="m14 8 4 4-4 4"/><path d="M5 5v14"/></svg>';
+
   actions.appendChild(stopBtn);
   actions.appendChild(copyIdBtn);
   actions.appendChild(groupBtn);
   if (session.type !== 'terminal') {
     if (health.state !== 'healthy') actions.appendChild(handoffBtn);
+    actions.appendChild(annotationsBtn);
+    actions.appendChild(transferBtn);
     actions.appendChild(forkBtn);
     actions.appendChild(timelineBtn);
     actions.appendChild(jsonlBtn);
