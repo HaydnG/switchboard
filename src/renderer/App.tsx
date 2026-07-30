@@ -1,6 +1,7 @@
 import { createPortal } from 'react-dom';
 import { ControlUiHost } from '@renderer/components/ControlUiHost';
 import { StatusBar } from '@renderer/components/StatusBar';
+import { SwitchboardShell } from '@renderer/components/SwitchboardShell';
 import { UpdateToast } from '@renderer/components/UpdateToast';
 import { useUpdater } from '@renderer/hooks/useUpdater';
 
@@ -13,6 +14,7 @@ export function App() {
 
   return (
     <>
+      <SwitchboardShell />
       {createPortal(
         <StatusBar
           updaterStatus={updaterStatus}

@@ -47,6 +47,7 @@ async function refreshGitSummaries() {
   if (jobs.length > 0) {
     await Promise.all(jobs);
     if (typeof updateGridCardStatuses === 'function') updateGridCardStatuses();
+    if (typeof publishSessionOverview === 'function') publishSessionOverview();
   }
 }
 

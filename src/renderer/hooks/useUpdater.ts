@@ -30,16 +30,19 @@ export function useUpdater() {
     }
   }, []);
 
-  const setUpdaterStatus = useCallback((text: string, durationMs?: number) => {
-    clearStatusTimer();
-    setUpdaterStatusState(text);
-    if (durationMs) {
-      statusTimerRef.current = setTimeout(() => {
-        setUpdaterStatusState('');
-        statusTimerRef.current = null;
-      }, durationMs);
-    }
-  }, [clearStatusTimer]);
+  const setUpdaterStatus = useCallback(
+    (text: string, durationMs?: number) => {
+      clearStatusTimer();
+      setUpdaterStatusState(text);
+      if (durationMs) {
+        statusTimerRef.current = setTimeout(() => {
+          setUpdaterStatusState('');
+          statusTimerRef.current = null;
+        }, durationMs);
+      }
+    },
+    [clearStatusTimer],
+  );
 
   useEffect(() => {
     const api = getApi();
@@ -56,7 +59,9 @@ export function useUpdater() {
           setUpdaterStatus('Up to date', 3000);
           break;
         case 'download-progress':
-          setUpdaterStatus(`Updating… ${Math.round((data as { percent?: number })?.percent ?? 0)}%`);
+          setUpdaterStatus(
+            `Updating… ${Math.round((data as { percent?: number })?.percent ?? 0)}%`,
+          );
           break;
         case 'update-downloaded': {
           if (!isDownloadedPayload(data)) break;
@@ -91,7 +96,7 @@ export function useUpdater() {
     if (result?.ok === false) {
       const message = result.dev
         ? 'Update restart is only available in packaged builds.'
-        : (result.error || 'Update restart failed. Please reinstall from the releases page.');
+        : result.error || 'Update restart failed. Please reinstall from the releases page.';
       window.showControlToast({ message });
     }
   }, []);

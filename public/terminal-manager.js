@@ -24,19 +24,28 @@ function setupTerminalKeyBindings(terminal, container, getSessionId, { onFind } 
 
     // Cmd/Ctrl+Shift+G → toggle grid view
     if (e.key === 'g' && (isMac ? e.metaKey : e.ctrlKey) && e.shiftKey && !e.altKey) {
-      if (e.type === 'keydown') { e._handled = true; toggleGridView(); }
+      if (e.type === 'keydown') {
+        e._handled = true;
+        toggleGridView();
+      }
       return false;
     }
 
     // Cmd/Ctrl+K → command palette
     if (e.key === 'k' && (isMac ? e.metaKey : e.ctrlKey) && !e.shiftKey && !e.altKey) {
-      if (e.type === 'keydown') { e._handled = true; toggleCommandPalette(); }
+      if (e.type === 'keydown') {
+        e._handled = true;
+        toggleCommandPalette();
+      }
       return false;
     }
 
     // Session navigation: Cmd+Shift+[/], Cmd+Arrow
     if (isSessionNavKey(e)) {
-      if (e.type === 'keydown') { e._handled = true; handleSessionNavKey(e); }
+      if (e.type === 'keydown') {
+        e._handled = true;
+        handleSessionNavKey(e);
+      }
       return false;
     }
 
@@ -95,11 +104,15 @@ function setupTerminalKeyBindings(terminal, container, getSessionId, { onFind } 
 
   const textarea = container.querySelector('.xterm-helper-textarea');
   if (textarea) {
-    textarea.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && (e.shiftKey || (!isMac && e.ctrlKey)) && !e.altKey && !e.metaKey) {
-        e.preventDefault();
-      }
-    }, { capture: true });
+    textarea.addEventListener(
+      'keydown',
+      (e) => {
+        if (e.key === 'Enter' && (e.shiftKey || (!isMac && e.ctrlKey)) && !e.altKey && !e.metaKey) {
+          e.preventDefault();
+        }
+      },
+      { capture: true },
+    );
   }
 }
 
@@ -131,6 +144,30 @@ function fitAndScroll(entry) {
   });
 }
 
+// Fit a set of terminals in one frame. All geometry reads happen before any
+// resize writes, avoiding repeated layout invalidation when the grid opens.
+function fitAndScrollMany(entries) {
+  const uniqueEntries = [...new Set((entries || []).filter(Boolean))];
+  const snapshots = uniqueEntries.map((entry) => ({
+    entry,
+    wasAtBottom: isAtBottom(entry.terminal),
+  }));
+  requestAnimationFrame(() => {
+    const measured = snapshots.map((snapshot) => ({
+      ...snapshot,
+      dims: snapshot.entry.fitAddon.proposeDimensions(),
+    }));
+    for (const { entry, wasAtBottom, dims } of measured) {
+      if (dims && dims.rows > 1) {
+        entry.terminal.resize(dims.cols, Math.max(1, dims.rows - 1));
+      } else if (dims) {
+        entry.fitAddon.fit();
+      }
+      if (wasAtBottom) entry.terminal.scrollToBottom();
+    }
+  });
+}
+
 // --- Terminal write buffering ---
 // Batch incoming terminal data to coalesce IPC chunks into fewer write() calls.
 const ESC_SYNC_START = '\x1b[?2026h';
@@ -142,6 +179,7 @@ function flushTerminalBuffer(sessionId) {
   const buf = terminalWriteBuffers.get(sessionId);
   if (!buf) return;
   clearTimeout(buf.timerId);
+  clearTimeout(buf.flushTimerId);
   cancelAnimationFrame(buf.rafId);
   terminalWriteBuffers.delete(sessionId);
 
@@ -164,10 +202,134 @@ function flushTerminalBuffer(sessionId) {
 
 function scheduleFlush(sessionId, buf) {
   cancelAnimationFrame(buf.rafId);
-  buf.rafId = requestAnimationFrame(() => flushTerminalBuffer(sessionId));
+  clearTimeout(buf.flushTimerId);
+  const latestChunk = buf.chunks[buf.chunks.length - 1];
+  buf.pendingChars = (buf.pendingChars || 0) + (latestChunk ? latestChunk.length : 0);
+  const entry = openSessions.get(sessionId);
+  const delay = terminalFlushDelay({
+    visible: entry?.renderVisible === true,
+    focused: sessionId === activeSessionId,
+    pendingChars: buf.pendingChars,
+  });
+  if (delay > 0) {
+    buf.flushTimerId = setTimeout(() => {
+      const current = terminalWriteBuffers.get(sessionId);
+      // A synchronized update may have started after this offscreen flush was
+      // scheduled. Let its end marker or safety timeout flush atomically.
+      if (current?.syncDepth > 0) return;
+      flushTerminalBuffer(sessionId);
+    }, delay);
+  } else {
+    buf.rafId = requestAnimationFrame(() => flushTerminalBuffer(sessionId));
+  }
 }
 
 // --- Terminal lifecycle helpers ---
+
+let terminalVisibilityObserver = null;
+let terminalVisibilityListenerInstalled = false;
+const WEBGL_CONTEXT_RETRY_MS = 30_000;
+
+function disposeTerminalWebgl(entry) {
+  if (!entry?.webglAddon) return;
+  const addon = entry.webglAddon;
+  entry.webglAddon = null;
+  try {
+    addon.dispose();
+  } catch (error) {
+    console.warn('[terminal] WebGL disposal failed', error);
+  }
+}
+
+function attachTerminalWebgl(entry) {
+  if (
+    !entry ||
+    entry.webglAddon ||
+    !window.api.isPackaged ||
+    Date.now() < (entry.webglRetryAfter || 0)
+  ) {
+    return;
+  }
+  let addon;
+  try {
+    addon = new WebglAddon.WebglAddon();
+    entry.webglAddon = addon;
+    addon.onContextLoss(() => {
+      if (entry.webglAddon !== addon) return;
+      entry.webglAddon = null;
+      entry.webglRetryAfter = Date.now() + WEBGL_CONTEXT_RETRY_MS;
+      try {
+        addon.dispose();
+      } catch {}
+      clearTimeout(entry.webglRetryTimer);
+      entry.webglRetryTimer = setTimeout(refreshTerminalRendering, WEBGL_CONTEXT_RETRY_MS);
+    });
+    entry.terminal.loadAddon(addon);
+  } catch (error) {
+    entry.webglAddon = null;
+    entry.webglRetryAfter = Date.now() + WEBGL_CONTEXT_RETRY_MS;
+    try {
+      addon?.dispose();
+    } catch {}
+    console.warn('[terminal] WebGL addon failed, using DOM renderer', error);
+  }
+}
+
+// Keep GPU contexts constrained to the focused/visible working set. xterm's own
+// IntersectionObserver pauses offscreen rendering; disposing only the WebGL
+// addon falls back to its DOM renderer and does not detach the PTY or buffer.
+function refreshTerminalRendering() {
+  const documentVisible = document.visibilityState !== 'hidden';
+  const candidates = [];
+  for (const [sessionId, entry] of openSessions) {
+    candidates.push({
+      id: sessionId,
+      visible: documentVisible && entry.renderVisible === true,
+      focused: documentVisible && sessionId === activeSessionId,
+      lastVisibleAt: entry.lastRenderVisibleAt || 0,
+    });
+  }
+  const selected = new Set(selectTerminalRendererIds(candidates, MAX_ACTIVE_WEBGL_RENDERERS));
+  for (const [sessionId, entry] of openSessions) {
+    if (selected.has(sessionId)) attachTerminalWebgl(entry);
+    else disposeTerminalWebgl(entry);
+  }
+}
+
+function ensureTerminalVisibilityObserver() {
+  if (terminalVisibilityObserver || typeof IntersectionObserver !== 'function') return;
+  terminalVisibilityObserver = new IntersectionObserver(
+    (changes) => {
+      for (const change of changes) {
+        const entry = change.target._switchboardTerminalEntry;
+        if (!entry) continue;
+        const visible =
+          change.isIntersecting === undefined
+            ? change.intersectionRatio > 0
+            : change.isIntersecting;
+        entry.renderVisible = visible;
+        if (visible) entry.lastRenderVisibleAt = performance.now();
+      }
+      refreshTerminalRendering();
+    },
+    { rootMargin: '200px 0px', threshold: 0 },
+  );
+  if (!terminalVisibilityListenerInstalled) {
+    document.addEventListener('visibilitychange', refreshTerminalRendering);
+    terminalVisibilityListenerInstalled = true;
+  }
+}
+
+function observeTerminalRendering(entry) {
+  ensureTerminalVisibilityObserver();
+  entry.element._switchboardTerminalEntry = entry;
+  if (terminalVisibilityObserver) {
+    terminalVisibilityObserver.observe(entry.element);
+  } else {
+    entry.renderVisible = true;
+  }
+  refreshTerminalRendering();
+}
 
 // Create an xterm instance, wire up IPC, and register in openSessions.
 // Returns the entry. Does NOT make it visible or fit it — call showSession() for that.
@@ -188,7 +350,9 @@ function createTerminalEntry(session) {
     linkHandler: {
       activate: (_event, uri) => {
         if (uri.startsWith('file://') && typeof openFileInPanel === 'function') {
-          try { openFileInPanel(sessionId, decodeURIComponent(new URL(uri).pathname)); } catch {}
+          try {
+            openFileInPanel(sessionId, decodeURIComponent(new URL(uri).pathname));
+          } catch {}
         } else {
           window.api.openExternal(uri);
         }
@@ -217,32 +381,23 @@ function createTerminalEntry(session) {
 
   const fitAddon = new FitAddon.FitAddon();
   terminal.loadAddon(fitAddon);
-  terminal.loadAddon(new WebLinksAddon.WebLinksAddon((_event, url) => {
-    if (url.startsWith('file://') && typeof openFileInPanel === 'function') {
-      try { openFileInPanel(sessionId, decodeURIComponent(new URL(url).pathname)); } catch {}
-    } else {
-      window.api.openExternal(url);
-    }
-  }));
+  terminal.loadAddon(
+    new WebLinksAddon.WebLinksAddon((_event, url) => {
+      if (url.startsWith('file://') && typeof openFileInPanel === 'function') {
+        try {
+          openFileInPanel(sessionId, decodeURIComponent(new URL(url).pathname));
+        } catch {}
+      } else {
+        window.api.openExternal(url);
+      }
+    }),
+  );
   const searchAddon = new SearchAddon.SearchAddon();
   terminal.loadAddon(searchAddon);
   terminal.loadAddon(new UnicodeGraphemesAddon.UnicodeGraphemesAddon());
   terminal.unicode.activeVersion = '15';
   terminal.open(container);
   container.style.backgroundColor = TERMINAL_THEME.background;
-
-  // GPU-accelerated rendering via WebGL drops renderer/compositor CPU in
-  // packaged builds. In dev, hot reload tears down renderer state frequently
-  // and Chromium can leave stale WebGL mailboxes behind, causing flicker.
-  if (window.api.isPackaged) {
-    try {
-      const webglAddon = new WebglAddon.WebglAddon();
-      webglAddon.onContextLoss(() => webglAddon.dispose());
-      terminal.loadAddon(webglAddon);
-    } catch (e) {
-      console.warn('[terminal] WebGL addon failed, falling back to DOM renderer', e);
-    }
-  }
 
   // --- Terminal search bar (Cmd/Ctrl+F) ---
   const searchBar = document.createElement('div');
@@ -259,13 +414,23 @@ function createTerminalEntry(session) {
   syncTitleToAriaLabel(searchBar);
   const searchInput = searchBar.querySelector('.terminal-search-input');
   const searchCount = searchBar.querySelector('.terminal-search-count');
-  const searchOpts = { decorations: { matchBackground: '#515C6A', activeMatchBackground: '#EAA549', matchOverviewRuler: '#515C6A', activeMatchColorOverviewRuler: '#EAA549' } };
+  const searchOpts = {
+    decorations: {
+      matchBackground: '#515C6A',
+      activeMatchBackground: '#EAA549',
+      matchOverviewRuler: '#515C6A',
+      activeMatchColorOverviewRuler: '#EAA549',
+    },
+  };
 
   function openSearchBar() {
     searchBar.style.display = 'flex';
     searchInput.focus();
     const sel = terminal.getSelection();
-    if (sel) { searchInput.value = sel; searchAddon.findNext(sel, searchOpts); }
+    if (sel) {
+      searchInput.value = sel;
+      searchAddon.findNext(sel, searchOpts);
+    }
   }
   function closeSearchBar() {
     searchBar.style.display = 'none';
@@ -276,31 +441,64 @@ function createTerminalEntry(session) {
   }
   searchInput.addEventListener('input', () => {
     const q = searchInput.value;
-    if (q) { searchAddon.findNext(q, searchOpts); } else { searchAddon.clearDecorations(); searchCount.textContent = ''; }
+    if (q) {
+      searchAddon.findNext(q, searchOpts);
+    } else {
+      searchAddon.clearDecorations();
+      searchCount.textContent = '';
+    }
   });
   searchInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { closeSearchBar(); e.preventDefault(); }
-    else if (e.key === 'Enter' && e.shiftKey) { searchAddon.findPrevious(searchInput.value, searchOpts); e.preventDefault(); }
-    else if (e.key === 'Enter') { searchAddon.findNext(searchInput.value, searchOpts); e.preventDefault(); }
+    if (e.key === 'Escape') {
+      closeSearchBar();
+      e.preventDefault();
+    } else if (e.key === 'Enter' && e.shiftKey) {
+      searchAddon.findPrevious(searchInput.value, searchOpts);
+      e.preventDefault();
+    } else if (e.key === 'Enter') {
+      searchAddon.findNext(searchInput.value, searchOpts);
+      e.preventDefault();
+    }
   });
-  searchBar.querySelector('.terminal-search-next').addEventListener('click', () => searchAddon.findNext(searchInput.value, searchOpts));
-  searchBar.querySelector('.terminal-search-prev').addEventListener('click', () => searchAddon.findPrevious(searchInput.value, searchOpts));
+  searchBar
+    .querySelector('.terminal-search-next')
+    .addEventListener('click', () => searchAddon.findNext(searchInput.value, searchOpts));
+  searchBar
+    .querySelector('.terminal-search-prev')
+    .addEventListener('click', () => searchAddon.findPrevious(searchInput.value, searchOpts));
   searchBar.querySelector('.terminal-search-close').addEventListener('click', closeSearchBar);
 
-  const entry = { terminal, element: container, fitAddon, searchAddon, openSearchBar, closeSearchBar, session, closed: false };
+  const entry = {
+    terminal,
+    element: container,
+    fitAddon,
+    searchAddon,
+    openSearchBar,
+    closeSearchBar,
+    session,
+    closed: false,
+    renderVisible: null,
+    lastRenderVisibleAt: 0,
+    webglAddon: null,
+    webglRetryAfter: 0,
+    webglRetryTimer: 0,
+  };
   openSessions.set(sessionId, entry);
+  observeTerminalRendering(entry);
 
   // Wire up IPC (use entry.session.sessionId so fork re-keying works)
-  terminal.onData(data => {
+  terminal.onData((data) => {
     if (data === '\x1b[I' || data === '\x1b[O') return;
     window.api.sendInput(entry.session.sessionId, data);
   });
-  setupTerminalKeyBindings(terminal, container, () => entry.session.sessionId, { onFind: openSearchBar });
+  setupTerminalKeyBindings(terminal, container, () => entry.session.sessionId, {
+    onFind: openSearchBar,
+  });
   setupDragAndDrop(container, () => entry.session.sessionId);
   terminal.onResize(({ cols, rows }) => {
     window.api.resizeTerminal(entry.session.sessionId, cols, rows);
   });
-  terminal.onTitleChange(title => {
+  terminal.onTitleChange((title) => {
     entry.ptyTitle = title;
     const agentTask = getAgentTaskFromTitle(title);
     if (typeof updateAgentTask === 'function') {
@@ -323,11 +521,18 @@ function destroySession(sessionId) {
   const entry = openSessions.get(sessionId);
   if (!entry) return;
   window.api.closeTerminal(sessionId);
+  terminalVisibilityObserver?.unobserve(entry.element);
+  entry.element._switchboardTerminalEntry = null;
+  clearTimeout(entry.webglRetryTimer);
+  disposeTerminalWebgl(entry);
   entry.terminal.dispose();
   entry.element.remove();
   openSessions.delete(sessionId);
   const card = gridCards.get(sessionId);
-  if (card) { card.remove(); gridCards.delete(sessionId); }
+  if (card) {
+    card.remove();
+    gridCards.delete(sessionId);
+  }
 }
 
 // Make a session visible in the current view mode (grid or single).
@@ -337,11 +542,16 @@ function showSession(sessionId) {
   const session = sessionMap.get(sessionId) || (entry && entry.session);
 
   // Update sidebar active state
-  document.querySelectorAll('.session-item.active').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.session-item.active').forEach((el) => el.classList.remove('active'));
   const item = document.querySelector(`[data-session-id="${sessionId}"]`);
   if (item) item.classList.add('active');
   setActiveSession(sessionId);
   clearNotifications(sessionId);
+  window.dispatchEvent(
+    new CustomEvent('switchboard:active-session', {
+      detail: { sessionId, session: session || null },
+    }),
+  );
 
   if (gridViewActive) {
     // Ensure grid layout is set up (e.g. on first session after startup restore)
@@ -358,7 +568,10 @@ function showSession(sessionId) {
       // ad-hoc wrap ignored grouping/filters and mis-placed grouped sessions.
       // If the active group filter would hide it, reset the filter so the click
       // still reveals the session in its own region (never changes membership).
-      if (typeof getGridAllowedSessionIds === 'function' && !getGridAllowedSessionIds().has(sessionId)) {
+      if (
+        typeof getGridAllowedSessionIds === 'function' &&
+        !getGridAllowedSessionIds().has(sessionId)
+      ) {
         gridGroupFilter = 'all';
         localStorage.setItem('gridGroupFilter', gridGroupFilter);
       }
@@ -367,7 +580,9 @@ function showSession(sessionId) {
     }
   } else {
     // Single terminal view
-    document.querySelectorAll('.terminal-container').forEach(el => el.classList.remove('visible'));
+    document
+      .querySelectorAll('.terminal-container')
+      .forEach((el) => el.classList.remove('visible'));
     placeholder.style.display = 'none';
     hidePlanViewer();
     if (session) showTerminalHeader(session);
@@ -377,6 +592,8 @@ function showSession(sessionId) {
       fitAndScroll(entry);
     }
   }
+  refreshTerminalRendering();
+  if (typeof publishSessionOverview === 'function') publishSessionOverview();
 }
 
 function setupDragAndDrop(container, getSessionId) {
@@ -403,7 +620,7 @@ function setupDragAndDrop(container, getSessionId) {
     container.classList.remove('drag-over');
     const files = e.dataTransfer.files;
     if (!files.length) return;
-    const paths = Array.from(files).map(f => shellEscape(window.api.getPathForFile(f)));
+    const paths = Array.from(files).map((f) => shellEscape(window.api.getPathForFile(f)));
     window.api.sendInput(getSessionId(), paths.join(' '));
   });
 }

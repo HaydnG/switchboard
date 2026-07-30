@@ -337,6 +337,15 @@
             <button class="settings-restart-update-btn" id="sv-restart-update-btn" hidden>Restart to Update</button>
           </div>
         </div>
+        <div class="settings-field">
+          <div class="settings-field-info">
+            <span class="settings-label">Diagnostics</span>
+            <div class="settings-description">Export a privacy-safe local report with versions, aggregate counts, index health, and redacted logs. Session transcripts and credentials are excluded.</div>
+          </div>
+          <div class="settings-field-control">
+            <button class="settings-check-updates-btn" id="sv-export-diagnostics-btn">Export Diagnostics</button>
+          </div>
+        </div>
       </div>` : ''}
 
       <div class="settings-btn-row">
@@ -542,6 +551,22 @@
           }
         });
       }
+    }
+
+    const exportDiagnosticsBtn = settingsViewerBody.querySelector('#sv-export-diagnostics-btn');
+    if (exportDiagnosticsBtn) {
+      exportDiagnosticsBtn.addEventListener('click', async () => {
+        exportDiagnosticsBtn.disabled = true;
+        exportDiagnosticsBtn.textContent = 'Exporting…';
+        const result = await window.api.exportDiagnostics();
+        exportDiagnosticsBtn.disabled = false;
+        exportDiagnosticsBtn.textContent = 'Export Diagnostics';
+        if (result?.ok) {
+          showControlToast({ message: 'Diagnostics exported.' });
+        } else if (!result?.canceled) {
+          showControlToast({ message: result?.error || 'Diagnostics export failed.' });
+        }
+      });
     }
 
     // Remove project button

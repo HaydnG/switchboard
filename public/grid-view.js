@@ -71,18 +71,24 @@ function saveGridLayout() {
 }
 
 function gridReducedMotion() {
-  return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  return (
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  );
 }
 
 // Debounce xterm reflow so a card only re-fits once a resize drag settles.
 function debouncedFit(sessionId) {
   const existing = gridFitTimers.get(sessionId);
   if (existing) clearTimeout(existing);
-  gridFitTimers.set(sessionId, setTimeout(() => {
-    gridFitTimers.delete(sessionId);
-    const entry = openSessions.get(sessionId);
-    if (entry) fitAndScroll(entry);
-  }, 90));
+  gridFitTimers.set(
+    sessionId,
+    setTimeout(() => {
+      gridFitTimers.delete(sessionId);
+      const entry = openSessions.get(sessionId);
+      if (entry) fitAndScroll(entry);
+    }, 90),
+  );
 }
 
 function getGridRuntimeState() {
@@ -113,15 +119,19 @@ function getGridGroupForSession(sessionId) {
 }
 
 function getGridAllowedSessionIds() {
-  let filtered = getFilteredSessionsByStatus(getGridOpenSessions(), getGridRuntimeState(), gridStatusFilter);
+  let filtered = getFilteredSessionsByStatus(
+    getGridOpenSessions(),
+    getGridRuntimeState(),
+    gridStatusFilter,
+  );
   if (gridGroupFilter && gridGroupFilter !== 'all') {
-    filtered = filtered.filter(session => {
+    filtered = filtered.filter((session) => {
       const group = getGridGroupForSession(session.sessionId);
       if (gridGroupFilter === 'ungrouped') return !group;
       return group && group.id === gridGroupFilter;
     });
   }
-  return new Set(filtered.map(session => session.sessionId));
+  return new Set(filtered.map((session) => session.sessionId));
 }
 
 function renderGridStatusFilters() {
@@ -162,7 +172,9 @@ function renderGridStatusFilters() {
 function gridSessionLabel(sessionId) {
   const entry = openSessions.get(sessionId);
   const session = sessionMap.get(sessionId) || (entry && entry.session);
-  return cleanDisplayName(session && (session.name || session.aiTitle || session.summary)) || sessionId;
+  return (
+    cleanDisplayName(session && (session.name || session.aiTitle || session.summary)) || sessionId
+  );
 }
 
 function gridSessionProject(sessionId) {
@@ -212,7 +224,7 @@ function renderGridBulkActions() {
   const collapseAllBtn = document.createElement('button');
   collapseAllBtn.type = 'button';
   collapseAllBtn.id = 'grid-collapse-all-btn';
-    collapseAllBtn.className = 'btn';
+  collapseAllBtn.className = 'btn';
   collapseAllBtn.title = 'Collapse all groups';
   collapseAllBtn.addEventListener('click', toggleGridCollapseAll);
   container.appendChild(collapseAllBtn);
@@ -255,11 +267,15 @@ async function stopAllRunning(runningToStop) {
   if (!runningToStop || runningToStop.length === 0) return;
   const ids = runningToStop.slice();
   const count = ids.length;
-  const details = ids.map(sid => ({ label: gridSessionLabel(sid), value: gridSessionProject(sid) || '—' }));
+  const details = ids.map((sid) => ({
+    label: gridSessionLabel(sid),
+    value: gridSessionProject(sid) || '—',
+  }));
 
   const confirmed = await showControlDialog({
     title: `Stop ${count} running session${count !== 1 ? 's' : ''}?`,
-    message: 'This terminates the running process for each session below. Their history stays available in the sidebar.',
+    message:
+      'This terminates the running process for each session below. Their history stays available in the sidebar.',
     confirmLabel: `Stop ${count} session${count !== 1 ? 's' : ''}`,
     tone: 'danger',
     details,
@@ -278,7 +294,11 @@ async function stopAllRunning(runningToStop) {
 // Group filter segment (spec 07): a divider plus an "All groups" / per-group /
 // "Ungrouped" control rendered alongside the status filters.
 function renderGridGroupFilters(container) {
-  if (typeof groupsState === 'undefined' || !groupsState.groups || groupsState.groups.length === 0) {
+  if (
+    typeof groupsState === 'undefined' ||
+    !groupsState.groups ||
+    groupsState.groups.length === 0
+  ) {
     return;
   }
 
@@ -340,10 +360,18 @@ function renderGridGroupFilters(container) {
 // localStorage, keyed by group id ('ungrouped' for the ungrouped pool) — mirrors
 // the sidebar user-group collapse (collapsedGroups) and gridGroupFilter.
 function getCollapsedGridGroups() {
-  try { return new Set(JSON.parse(localStorage.getItem('collapsedGridGroups') || '[]')); } catch { return new Set(); }
+  try {
+    return new Set(JSON.parse(localStorage.getItem('collapsedGridGroups') || '[]'));
+  } catch {
+    return new Set();
+  }
 }
 function saveCollapsedGridGroups(set) {
-  try { localStorage.setItem('collapsedGridGroups', JSON.stringify([...set])); } catch { /* storage unavailable */ }
+  try {
+    localStorage.setItem('collapsedGridGroups', JSON.stringify([...set]));
+  } catch {
+    /* storage unavailable */
+  }
 }
 function gridRegionCollapseKey(group) {
   return group ? group.id : 'ungrouped';
@@ -359,14 +387,16 @@ function toggleGridRegionCollapse(region) {
   const btn = region.querySelector('.grid-region-expand');
   if (btn) btn.setAttribute('aria-expanded', String(!willCollapse));
   const set = getCollapsedGridGroups();
-  if (willCollapse) set.add(key); else set.delete(key);
+  if (willCollapse) set.add(key);
+  else set.delete(key);
   saveCollapsedGridGroups(set);
   if (!willCollapse) {
-    for (const cardEl of region.querySelectorAll('.grid-card')) {
-      const entry = openSessions.get(cardEl.dataset.sessionId);
-      if (entry) fitAndScroll(entry);
-    }
+    const entries = [...region.querySelectorAll('.grid-card')]
+      .map((cardEl) => openSessions.get(cardEl.dataset.sessionId))
+      .filter(Boolean);
+    fitAndScrollMany(entries);
   }
+  refreshTerminalRendering();
   updateGridCollapseAllBtn();
 }
 
@@ -382,7 +412,7 @@ function updateGridCollapseAllBtn() {
     return;
   }
   btn.style.display = '';
-  const allCollapsed = [...regions].every(r => r.classList.contains('collapsed'));
+  const allCollapsed = [...regions].every((r) => r.classList.contains('collapsed'));
   btn.classList.toggle('all-collapsed', allCollapsed);
   btn.title = allCollapsed ? 'Expand all groups' : 'Collapse all groups';
   btn.setAttribute('aria-label', btn.title);
@@ -397,22 +427,26 @@ function updateGridCollapseAllBtn() {
 function toggleGridCollapseAll() {
   const regions = [...terminalsEl.querySelectorAll('.grid-region')];
   if (regions.length === 0) return;
-  const collapse = regions.some(r => !r.classList.contains('collapsed'));
+  const collapse = regions.some((r) => !r.classList.contains('collapsed'));
   const set = getCollapsedGridGroups();
   for (const region of regions) {
     region.classList.toggle('collapsed', collapse);
     const expandBtn = region.querySelector('.grid-region-expand');
     if (expandBtn) expandBtn.setAttribute('aria-expanded', String(!collapse));
     const key = region.dataset.collapseKey;
-    if (key) { if (collapse) set.add(key); else set.delete(key); }
+    if (key) {
+      if (collapse) set.add(key);
+      else set.delete(key);
+    }
   }
   saveCollapsedGridGroups(set);
   if (!collapse) {
-    for (const cardEl of terminalsEl.querySelectorAll('.grid-region .grid-card')) {
-      const entry = openSessions.get(cardEl.dataset.sessionId);
-      if (entry) fitAndScroll(entry);
-    }
+    const entries = [...terminalsEl.querySelectorAll('.grid-region .grid-card')]
+      .map((cardEl) => openSessions.get(cardEl.dataset.sessionId))
+      .filter(Boolean);
+    fitAndScrollMany(entries);
   }
+  refreshTerminalRendering();
   updateGridCollapseAllBtn();
 }
 
@@ -482,13 +516,15 @@ function buildGridRegion(group, sessions) {
     const launchBtn = document.createElement('button');
     launchBtn.type = 'button';
     launchBtn.className = 'grid-region-launch-btn';
-    const memberCount = (typeof getGroupMemberSessionIds === 'function')
-      ? getGroupMemberSessionIds(group.id).length
-      : sessions.length;
+    const memberCount =
+      typeof getGroupMemberSessionIds === 'function'
+        ? getGroupMemberSessionIds(group.id).length
+        : sessions.length;
     const launchLabel = `Launch all ${memberCount} session${memberCount === 1 ? '' : 's'} in ${group.name}`;
     launchBtn.title = launchLabel;
     launchBtn.setAttribute('aria-label', launchLabel);
-    launchBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
+    launchBtn.innerHTML =
+      '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
     launchBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       launchAllInGroup(group.id);
@@ -511,8 +547,11 @@ function wrapInGridCard(sessionId, parent, layout) {
   if (!session || !entry) return;
   const target = parent || terminalsEl;
 
-  const displayName = cleanDisplayName(session.name || session.aiTitle || session.summary) || sessionId;
-  const shortProject = session.projectPath ? session.projectPath.split('/').filter(Boolean).slice(-2).join('/') : '';
+  const displayName =
+    cleanDisplayName(session.name || session.aiTitle || session.summary) || sessionId;
+  const shortProject = session.projectPath
+    ? session.projectPath.split('/').filter(Boolean).slice(-2).join('/')
+    : '';
   const status = getSessionStatus(session, getGridRuntimeState());
   const health = getSessionHealth(session);
 
@@ -532,7 +571,9 @@ function wrapInGridCard(sessionId, parent, layout) {
   gridLayout[sessionId] = {
     order: Number.isFinite(previousLayout.order)
       ? previousLayout.order
-      : (Number.isFinite(layout?.order) ? layout.order : 0),
+      : Number.isFinite(layout?.order)
+        ? layout.order
+        : 0,
     colSpan,
     rowSpan,
   };
@@ -574,21 +615,25 @@ function wrapInGridCard(sessionId, parent, layout) {
   snapBtn.type = 'button';
   snapBtn.title = 'Snap layout';
   snapBtn.setAttribute('aria-label', `Snap layout for ${displayName}`);
-  snapBtn.innerHTML = '<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="1.5" width="13" height="13" rx="2"/><line x1="8" y1="1.5" x2="8" y2="14.5"/><line x1="1.5" y1="8" x2="14.5" y2="8"/></svg>';
+  snapBtn.innerHTML =
+    '<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="1.5" width="13" height="13" rx="2"/><line x1="8" y1="1.5" x2="8" y2="14.5"/><line x1="1.5" y1="8" x2="14.5" y2="8"/></svg>';
   snapBtn.onclick = (e) => {
     e.stopPropagation();
     toggleSnapLayoutPopover(gridSessionIdForCard(card, sessionId), card, snapBtn);
   };
   // Hover-open with an intent delay (gated to fine/hover pointers inside the
   // scheduler); moving onto the popover keeps it open.
-  snapBtn.addEventListener('mouseenter', () => scheduleSnapHoverOpen(gridSessionIdForCard(card, sessionId), card, snapBtn));
+  snapBtn.addEventListener('mouseenter', () =>
+    scheduleSnapHoverOpen(gridSessionIdForCard(card, sessionId), card, snapBtn),
+  );
   snapBtn.addEventListener('mouseleave', () => scheduleSnapHoverClose());
   header.appendChild(snapBtn);
 
   const stopBtn = document.createElement('button');
   stopBtn.className = 'grid-card-stop-btn';
   stopBtn.title = 'Stop session';
-  stopBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="2" width="8" height="8" rx="1"/></svg>';
+  stopBtn.innerHTML =
+    '<svg width="10" height="10" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="2" width="8" height="8" rx="1"/></svg>';
   stopBtn.style.display = activePtyIds.has(sessionId) ? '' : 'none';
   stopBtn.onclick = (e) => {
     e.stopPropagation();
@@ -603,7 +648,8 @@ function wrapInGridCard(sessionId, parent, layout) {
   const timeSpan = document.createElement('span');
   timeSpan.textContent = formatDate(lastActivityTime.get(sessionId) || new Date(session.modified));
   footer.appendChild(statusSpan);
-  const actionsBar = typeof buildQuickActionsBar === 'function' ? buildQuickActionsBar(sessionId) : null;
+  const actionsBar =
+    typeof buildQuickActionsBar === 'function' ? buildQuickActionsBar(sessionId) : null;
   if (actionsBar) footer.appendChild(actionsBar);
   footer.appendChild(timeSpan);
 
@@ -612,7 +658,8 @@ function wrapInGridCard(sessionId, parent, layout) {
   resizeHandle.className = 'grid-card-resize-handle';
   resizeHandle.title = 'Resize card';
   resizeHandle.setAttribute('aria-hidden', 'true');
-  resizeHandle.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><path d="M11 11H8l3-3zM11 6.5H5.5L11 1zM6 11H3l3-3z" opacity="0.9"/></svg>';
+  resizeHandle.innerHTML =
+    '<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><path d="M11 11H8l3-3zM11 6.5H5.5L11 1zM6 11H3l3-3z" opacity="0.9"/></svg>';
 
   // Build the card DOM
   card.appendChild(header);
@@ -633,9 +680,13 @@ function wrapInGridCard(sessionId, parent, layout) {
   makeButtonLike(header, focusFromCardChrome, `Focus ${displayName}`);
 
   // Drag-to-reorder / drag-into-group via the header (single shared drag system).
-  header.addEventListener('pointerdown', (e) => startCardDrag(gridSessionIdForCard(card, sessionId), card, e));
+  header.addEventListener('pointerdown', (e) =>
+    startCardDrag(gridSessionIdForCard(card, sessionId), card, e),
+  );
   // Resize via the corner handle.
-  resizeHandle.addEventListener('pointerdown', (e) => startCardResize(gridSessionIdForCard(card, sessionId), card, e));
+  resizeHandle.addEventListener('pointerdown', (e) =>
+    startCardResize(gridSessionIdForCard(card, sessionId), card, e),
+  );
   // Double-click header to switch to full terminal view
   header.addEventListener('dblclick', (e) => {
     e.stopPropagation();
@@ -701,10 +752,12 @@ function persistGridOrder() {
 }
 
 function clearGridDropTargets() {
-  terminalsEl.querySelectorAll('.grid-card.drop-before, .grid-card.drop-after')
-    .forEach(c => c.classList.remove('drop-before', 'drop-after'));
-  terminalsEl.querySelectorAll('.grid-region.drop-region')
-    .forEach(r => r.classList.remove('drop-region'));
+  terminalsEl
+    .querySelectorAll('.grid-card.drop-before, .grid-card.drop-after')
+    .forEach((c) => c.classList.remove('drop-before', 'drop-after'));
+  terminalsEl
+    .querySelectorAll('.grid-region.drop-region')
+    .forEach((r) => r.classList.remove('drop-region'));
 }
 
 function getGridDropInfo(card, x, y) {
@@ -731,7 +784,7 @@ function updateGridDropTarget(card, x, y) {
   }
   if (info.targetCard) {
     const r = info.targetCard.getBoundingClientRect();
-    const after = (x - r.left) > r.width / 2;
+    const after = x - r.left > r.width / 2;
     info.targetCard.classList.add(after ? 'drop-after' : 'drop-before');
   }
 }
@@ -748,7 +801,9 @@ function gridCardLayoutRect(el) {
     try {
       const m = new DOMMatrixReadOnly(t);
       return { left: r.left - m.m41, top: r.top - m.m42, width: r.width, height: r.height };
-    } catch { /* fall through to raw rect */ }
+    } catch {
+      /* fall through to raw rect */
+    }
   }
   return { left: r.left, top: r.top, width: r.width, height: r.height };
 }
@@ -762,9 +817,11 @@ function cursorInsertionIndex(rects, x, y) {
   for (const r of rects) {
     const cx = r.left + r.width / 2;
     let before;
-    if (y > r.top + r.height) before = true;       // cursor in a lower row
-    else if (y < r.top) before = false;            // cursor in an upper row
-    else before = x > cx;                           // same row → compare to center
+    if (y > r.top + r.height)
+      before = true; // cursor in a lower row
+    else if (y < r.top)
+      before = false; // cursor in an upper row
+    else before = x > cx; // same row → compare to center
     if (before) idx++;
   }
   return idx;
@@ -788,14 +845,14 @@ function placeholderSlotIndex(container, placeholder, exclude) {
 // overlapping animations continue smoothly. `exclude` is the lifted card.
 function flipMovePlaceholder(container, placeholder, refNode, exclude) {
   const sibs = [...container.children].filter(
-    n => n.classList && n.classList.contains('grid-card') && n !== exclude
+    (n) => n.classList && n.classList.contains('grid-card') && n !== exclude,
   );
   // READ (batched): current visual rects (include any in-flight transform).
-  const first = sibs.map(c => c.getBoundingClientRect());
+  const first = sibs.map((c) => c.getBoundingClientRect());
   // WRITE: move the placeholder slot.
   container.insertBefore(placeholder, refNode);
   // READ (batched): settled post-move layout rects (transform-free).
-  const last = sibs.map(c => gridCardLayoutRect(c));
+  const last = sibs.map((c) => gridCardLayoutRect(c));
   // WRITE: invert each card to its old visual spot (or settle if at rest).
   const moved = [];
   for (let i = 0; i < sibs.length; i++) {
@@ -893,10 +950,11 @@ function startCardDrag(sessionId, card, e) {
 
     // Only reorder while the cursor is within the active container's box.
     const cRect = container.getBoundingClientRect();
-    if (lastX < cRect.left || lastX > cRect.right || lastY < cRect.top || lastY > cRect.bottom) return;
+    if (lastX < cRect.left || lastX > cRect.right || lastY < cRect.top || lastY > cRect.bottom)
+      return;
 
     const sibs = [...container.children].filter(
-      n => n.classList && n.classList.contains('grid-card') && n !== card && n !== placeholder
+      (n) => n.classList && n.classList.contains('grid-card') && n !== card && n !== placeholder,
     );
     const rects = sibs.map(gridCardLayoutRect);
     const idx = Math.max(0, Math.min(cursorInsertionIndex(rects, lastX, lastY), sibs.length));
@@ -923,7 +981,10 @@ function startCardDrag(sessionId, card, e) {
   };
 
   const endDrag = () => {
-    if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+    if (rafId) {
+      cancelAnimationFrame(rafId);
+      rafId = 0;
+    }
     card.classList.remove('dragging');
     document.body.classList.remove('grid-dragging');
     card.style.pointerEvents = '';
@@ -989,12 +1050,12 @@ function commitCardDrag(sessionId, card, placeholder, reduced, x, y) {
   if (info && info.targetCard && info.targetCard.parentElement === card.parentElement) {
     const container = card.parentElement;
     const r = info.targetCard.getBoundingClientRect();
-    const after = (x - r.left) > r.width / 2;
-    const ids = [...container.querySelectorAll('.grid-card')].map(c => c.dataset.sessionId);
+    const after = x - r.left > r.width / 2;
+    const ids = [...container.querySelectorAll('.grid-card')].map((c) => c.dataset.sessionId);
     const targetId = info.targetCard.dataset.sessionId;
     let newIds = reorder(ids, sessionId, targetId);
     if (after) {
-      newIds = ids.filter(id => id !== sessionId);
+      newIds = ids.filter((id) => id !== sessionId);
       newIds.splice(newIds.indexOf(targetId) + 1, 0, sessionId);
     }
     for (const id of newIds) {
@@ -1016,7 +1077,11 @@ function startCardResize(sessionId, card, e) {
   // them), making the corner resize reliable.
   const handle = e.currentTarget;
   if (handle && typeof handle.setPointerCapture === 'function') {
-    try { handle.setPointerCapture(e.pointerId); } catch { /* capture best-effort */ }
+    try {
+      handle.setPointerCapture(e.pointerId);
+    } catch {
+      /* capture best-effort */
+    }
   }
   const container = card.parentElement;
   const startRect = card.getBoundingClientRect();
@@ -1035,7 +1100,8 @@ function startCardResize(sessionId, card, e) {
     const rawCols = Math.round((startRect.width + dx + GRID_GAP) / colUnit);
     const rawRows = Math.round((startRect.height + dy + GRID_GAP) / rowUnit);
     const span = normalizeSpan({ cols: rawCols, rows: rawRows }, maxCols);
-    if (Number(card.dataset.colSpan) === span.cols && Number(card.dataset.rowSpan) === span.rows) return;
+    if (Number(card.dataset.colSpan) === span.cols && Number(card.dataset.rowSpan) === span.rows)
+      return;
     writeCardSpan(sessionId, card, span);
     debouncedFit(sessionId);
   };
@@ -1044,7 +1110,11 @@ function startCardResize(sessionId, card, e) {
     document.removeEventListener('pointermove', onMove);
     document.removeEventListener('pointerup', onUp);
     if (handle && typeof handle.releasePointerCapture === 'function') {
-      try { handle.releasePointerCapture(ev.pointerId); } catch { /* best-effort */ }
+      try {
+        handle.releasePointerCapture(ev.pointerId);
+      } catch {
+        /* best-effort */
+      }
     }
     card.classList.remove('resizing');
     document.body.classList.remove('grid-dragging');
@@ -1101,13 +1171,21 @@ const SNAP_HOVER_CLOSE_DELAY = 180;
 
 // Hover-open only makes sense for fine/hover-capable pointers — never on touch.
 function snapHoverEnabled() {
-  return typeof window.matchMedia === 'function' &&
-    (window.matchMedia('(hover: hover)').matches || window.matchMedia('(pointer: fine)').matches);
+  return (
+    typeof window.matchMedia === 'function' &&
+    (window.matchMedia('(hover: hover)').matches || window.matchMedia('(pointer: fine)').matches)
+  );
 }
 
 function clearSnapHoverTimers() {
-  if (snapHoverOpenTimer) { clearTimeout(snapHoverOpenTimer); snapHoverOpenTimer = null; }
-  if (snapHoverCloseTimer) { clearTimeout(snapHoverCloseTimer); snapHoverCloseTimer = null; }
+  if (snapHoverOpenTimer) {
+    clearTimeout(snapHoverOpenTimer);
+    snapHoverOpenTimer = null;
+  }
+  if (snapHoverCloseTimer) {
+    clearTimeout(snapHoverCloseTimer);
+    snapHoverCloseTimer = null;
+  }
 }
 
 function closeSnapLayoutPopover() {
@@ -1121,7 +1199,11 @@ function closeSnapLayoutPopover() {
   }
 }
 function onSnapPopoverOutside(e) {
-  if (snapPopoverEl && !snapPopoverEl.contains(e.target) && !e.target.closest('.grid-card-snap-btn')) {
+  if (
+    snapPopoverEl &&
+    !snapPopoverEl.contains(e.target) &&
+    !e.target.closest('.grid-card-snap-btn')
+  ) {
     closeSnapLayoutPopover();
   }
 }
@@ -1134,7 +1216,10 @@ function onSnapPopoverKey(e) {
 // shows. Opening replaces any other card's popover.
 function scheduleSnapHoverOpen(sessionId, card, anchor) {
   if (!snapHoverEnabled()) return;
-  if (snapHoverCloseTimer) { clearTimeout(snapHoverCloseTimer); snapHoverCloseTimer = null; }
+  if (snapHoverCloseTimer) {
+    clearTimeout(snapHoverCloseTimer);
+    snapHoverCloseTimer = null;
+  }
   if (snapPopoverEl && snapPopoverEl.dataset.sessionId === sessionId) return;
   if (snapHoverOpenTimer) clearTimeout(snapHoverOpenTimer);
   snapHoverOpenTimer = setTimeout(() => {
@@ -1146,7 +1231,10 @@ function scheduleSnapHoverOpen(sessionId, card, anchor) {
 // Schedule a hover-close after the grace delay. Cancels a pending open, and only
 // closes popovers that were opened by hover (click-opened ones persist).
 function scheduleSnapHoverClose() {
-  if (snapHoverOpenTimer) { clearTimeout(snapHoverOpenTimer); snapHoverOpenTimer = null; }
+  if (snapHoverOpenTimer) {
+    clearTimeout(snapHoverOpenTimer);
+    snapHoverOpenTimer = null;
+  }
   if (!snapPopoverHoverOpened) return;
   if (snapHoverCloseTimer) clearTimeout(snapHoverCloseTimer);
   snapHoverCloseTimer = setTimeout(() => {
@@ -1185,8 +1273,8 @@ function openSnapLayoutPopover(sessionId, card, anchor, { hover = false } = {}) 
   ];
   const seen = new Set();
   const usable = presets
-    .map(p => ({ ...p, cols: Math.min(p.cols, maxCols) }))
-    .filter(p => {
+    .map((p) => ({ ...p, cols: Math.min(p.cols, maxCols) }))
+    .filter((p) => {
       const key = `${p.cols}x${p.rows}`;
       if (seen.has(key)) return false;
       seen.add(key);
@@ -1230,7 +1318,10 @@ function openSnapLayoutPopover(sessionId, card, anchor, { hover = false } = {}) 
   // Treat the popover as part of the hover region: entering cancels a pending
   // close, leaving schedules one (only effective for hover-opened popovers).
   pop.addEventListener('mouseenter', () => {
-    if (snapHoverCloseTimer) { clearTimeout(snapHoverCloseTimer); snapHoverCloseTimer = null; }
+    if (snapHoverCloseTimer) {
+      clearTimeout(snapHoverCloseTimer);
+      snapHoverCloseTimer = null;
+    }
   });
   pop.addEventListener('mouseleave', () => scheduleSnapHoverClose());
 
@@ -1265,7 +1356,7 @@ function unwrapGridCards() {
   }
   gridCards.clear();
   // Remove any group region containers and reset grouped layout
-  terminalsEl.querySelectorAll('.grid-region').forEach(el => el.remove());
+  terminalsEl.querySelectorAll('.grid-region').forEach((el) => el.remove());
   document.getElementById('grid-empty-state')?.remove();
   terminalsEl.classList.remove('grid-grouped');
 }
@@ -1275,11 +1366,11 @@ function focusGridCard(sessionId, { reveal = true } = {}) {
   setActiveSession(sessionId);
   clearNotifications(sessionId);
   // Update sidebar active highlight
-  document.querySelectorAll('.session-item.active').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.session-item.active').forEach((el) => el.classList.remove('active'));
   const sidebarItem = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
   if (sidebarItem) sidebarItem.classList.add('active');
   // Update visual focus
-  document.querySelectorAll('.grid-card').forEach(c => c.classList.remove('focused'));
+  document.querySelectorAll('.grid-card').forEach((c) => c.classList.remove('focused'));
   const card = gridCards.get(sessionId);
   if (card) {
     // An explicit focus (click/keyboard nav/step/inbox) should reveal the card
@@ -1300,6 +1391,7 @@ function focusGridCard(sessionId, { reveal = true } = {}) {
   }
   const entry = openSessions.get(sessionId);
   if (entry) entry.terminal.focus();
+  refreshTerminalRendering();
 }
 
 // The set of session ids the grid should currently render, in sidebar order.
@@ -1331,7 +1423,7 @@ function gridNeedsRebuild() {
     if (!card) return true;
     const group = getGridGroupForSession(sid);
     const region = card.closest('.grid-region');
-    const renderedGroupId = region ? (region.dataset.groupId || '') : '';
+    const renderedGroupId = region ? region.dataset.groupId || '' : '';
     if ((group ? group.id : '') !== renderedGroupId) return true;
   }
   return false;
@@ -1362,19 +1454,36 @@ function updateGridCardStatuses() {
     if (!session) continue;
     const status = getSessionStatus(session, getGridRuntimeState());
     const health = getSessionHealth(session);
-    const running = status.key === 'running' || status.key === 'busy'
-      || status.key === 'needs-attention' || status.key === 'response-ready';
+    const running =
+      status.key === 'running' ||
+      status.key === 'busy' ||
+      status.key === 'needs-attention' ||
+      status.key === 'response-ready';
     // Keep the card title in sync with the live session metadata (user renames,
     // AI titles, /title). Title updates arrive via loadProjects() without a full
     // grid rebuild, so refresh the name in place here rather than leaving it stale.
     const name = card.querySelector('.grid-card-name');
     if (name) {
-      const displayName = cleanDisplayName(session.name || session.aiTitle || session.summary) || sid;
+      const displayName =
+        cleanDisplayName(session.name || session.aiTitle || session.summary) || sid;
       if (name.textContent !== displayName) name.textContent = displayName;
     }
     const dot = card.querySelector('.grid-card-dot');
-    if (dot) dot.className = 'grid-card-dot ' + (status.key === 'busy' ? 'busy' : (running ? 'running' : 'stopped'));
-    card.classList.remove('status-needs-attention', 'status-response-ready', 'status-busy', 'status-running', 'status-exited', 'status-idle', 'health-healthy', 'health-growing', 'health-marathon-risk', 'health-handoff-recommended');
+    if (dot)
+      dot.className =
+        'grid-card-dot ' + (status.key === 'busy' ? 'busy' : running ? 'running' : 'stopped');
+    card.classList.remove(
+      'status-needs-attention',
+      'status-response-ready',
+      'status-busy',
+      'status-running',
+      'status-exited',
+      'status-idle',
+      'health-healthy',
+      'health-growing',
+      'health-marathon-risk',
+      'health-handoff-recommended',
+    );
     card.classList.add(status.className, health.className);
     const chip = card.querySelector('.grid-card-status-chip');
     if (chip) {
@@ -1412,8 +1521,10 @@ function updateGridCardStatuses() {
 // without rebuilding the regions.
 function updateGridRegionCounts() {
   for (const region of terminalsEl.querySelectorAll('.grid-region')) {
-    const sids = [...region.querySelectorAll('.grid-card')].map(c => c.dataset.sessionId);
-    const sessions = sids.map(sid => sessionMap.get(sid) || openSessions.get(sid)?.session).filter(Boolean);
+    const sids = [...region.querySelectorAll('.grid-card')].map((c) => c.dataset.sessionId);
+    const sessions = sids
+      .map((sid) => sessionMap.get(sid) || openSessions.get(sid)?.session)
+      .filter(Boolean);
     const counts = getStatusCounts(sessions, getGridRuntimeState());
     const setChip = (cls, value, label) => {
       let chip = region.querySelector(`.grid-region-chip.${cls}`);
@@ -1422,7 +1533,8 @@ function updateGridRegionCounts() {
           chip = document.createElement('span');
           chip.className = `grid-region-chip ${cls}`;
           const countEl = region.querySelector('.grid-region-count');
-          if (countEl) countEl.after(chip); else region.querySelector('.grid-region-header')?.appendChild(chip);
+          if (countEl) countEl.after(chip);
+          else region.querySelector('.grid-region-header')?.appendChild(chip);
         }
         chip.textContent = String(value);
         chip.title = label(value);
@@ -1430,7 +1542,11 @@ function updateGridRegionCounts() {
         chip.remove();
       }
     };
-    setChip('status-needs-attention', counts.attention, (n) => `${n} need${n === 1 ? 's' : ''} attention`);
+    setChip(
+      'status-needs-attention',
+      counts.attention,
+      (n) => `${n} need${n === 1 ? 's' : ''} attention`,
+    );
     setChip('status-response-ready', counts.ready, (n) => `${n} ready`);
   }
 }
@@ -1445,13 +1561,16 @@ function updateGridRegionCounts() {
 let gridAutoMounting = false;
 async function ensureGridActiveSessionsMounted() {
   if (!gridViewActive || gridAutoMounting || gridInteracting) return false;
-  if (typeof getGridAutoOpenSessionIds !== 'function' || typeof attachRunningSession !== 'function') {
+  if (
+    typeof getGridAutoOpenSessionIds !== 'function' ||
+    typeof attachRunningSession !== 'function'
+  ) {
     return false;
   }
   // Only sessions we have metadata for can become cards; the rest are picked up
   // on a later poll once loadProjects() populates sessionMap.
   const toMount = getGridAutoOpenSessionIds(getGridRuntimeState())
-    .map(sid => sessionMap.get(sid))
+    .map((sid) => sessionMap.get(sid))
     .filter(Boolean);
   if (toMount.length === 0) return false;
 
@@ -1516,7 +1635,7 @@ function showGridView() {
   }
 
   // Hide all terminals first, then collect allowed session ids in sidebar order.
-  document.querySelectorAll('.terminal-container').forEach(el => el.classList.remove('visible'));
+  document.querySelectorAll('.terminal-container').forEach((el) => el.classList.remove('visible'));
   const orderedSids = [];
   const sidebarItems = sidebarContent.querySelectorAll('.session-item[data-session-id]');
   for (const item of sidebarItems) {
@@ -1571,7 +1690,8 @@ function showGridView() {
 
   // Show grid header bar with session count
   gridViewer.style.display = 'block';
-  gridViewerCount.textContent = sessionIds.length + ' session' + (sessionIds.length !== 1 ? 's' : '');
+  gridViewerCount.textContent =
+    sessionIds.length + ' session' + (sessionIds.length !== 1 ? 's' : '');
   if (sessionIds.length === 0) showGridEmptyState();
   updateGridCollapseAllBtn();
   saveGridLayout();
@@ -1586,19 +1706,23 @@ function showGridView() {
 
   updateGridColumns();
 
-  // Fit all terminals after layout resolves (skip cards hidden in a collapsed
-  // region — a display:none terminal can't be measured/fit).
+  // Fit all measurable terminals in one read/write batch after layout resolves
+  // (a display:none terminal in a collapsed region cannot be measured).
+  const entriesToFit = [];
   for (const sid of sessionIds) {
     const entry = openSessions.get(sid);
     if (!entry) continue;
     const card = gridCards.get(sid);
     if (card && card.closest('.grid-region.collapsed')) continue;
-    fitAndScroll(entry);
+    entriesToFit.push(entry);
   }
+  fitAndScrollMany(entriesToFit);
+  refreshTerminalRendering();
   // Focus active or first (deferred so fitAndScroll's rAF runs first). This
   // passive focus must not auto-expand a collapsed region the user persisted.
   requestAnimationFrame(() => {
-    const toFocus = activeSessionId && sessionIds.includes(activeSessionId) ? activeSessionId : sessionIds[0];
+    const toFocus =
+      activeSessionId && sessionIds.includes(activeSessionId) ? activeSessionId : sessionIds[0];
     if (toFocus) focusGridCard(toFocus, { reveal: false });
   });
 }
@@ -1613,7 +1737,8 @@ function showGridEmptyState() {
   title.textContent = 'No open sessions';
   const hint = document.createElement('div');
   hint.className = 'grid-empty-hint';
-  hint.textContent = 'Click a session in the sidebar to open it here. Sessions with a live agent appear automatically.';
+  hint.textContent =
+    'Click a session in the sidebar to open it here. Sessions with a live agent appear automatically.';
   el.append(title, hint);
   terminalsEl.appendChild(el);
 }
@@ -1627,15 +1752,18 @@ function updateGridColumns() {
     for (const card of container.querySelectorAll('.grid-card')) {
       const sessionId = card.dataset.sessionId;
       if (!sessionId) continue;
-      const span = normalizeSpan({
-        cols: card.dataset.colSpan,
-        rows: card.dataset.rowSpan,
-      }, maxCols);
+      const span = normalizeSpan(
+        {
+          cols: card.dataset.colSpan,
+          rows: card.dataset.rowSpan,
+        },
+        maxCols,
+      );
       const stored = gridLayout[sessionId] || {};
-      const domMatches = Number(card.dataset.colSpan) === span.cols &&
-        Number(card.dataset.rowSpan) === span.rows;
-      const layoutMatches = Number(stored.colSpan) === span.cols &&
-        Number(stored.rowSpan) === span.rows;
+      const domMatches =
+        Number(card.dataset.colSpan) === span.cols && Number(card.dataset.rowSpan) === span.rows;
+      const layoutMatches =
+        Number(stored.colSpan) === span.cols && Number(stored.rowSpan) === span.rows;
       if (domMatches && layoutMatches) continue;
       writeCardSpan(sessionId, card, span);
       layoutChanged = true;
@@ -1693,6 +1821,7 @@ function hideGridView() {
   terminalsEl.classList.remove('grid-few-cards', 'grid-single-card');
   terminalsEl.style.gridTemplateColumns = '';
   gridViewer.style.display = 'none';
+  refreshTerminalRendering();
   const btn = document.getElementById('grid-toggle-btn');
   if (btn) {
     btn.classList.remove('active');
@@ -1761,12 +1890,17 @@ function navigateGrid(direction) {
   if (!gridViewActive) return;
   // Exclude cards hidden inside a collapsed region — they have no usable
   // geometry and shouldn't be reachable by 2D navigation.
-  const cards = [...terminalsEl.querySelectorAll('.grid-card')].filter(c => c.offsetParent !== null);
+  const cards = [...terminalsEl.querySelectorAll('.grid-card')].filter(
+    (c) => c.offsetParent !== null,
+  );
   if (cards.length === 0) return;
   const currentCard = gridCards.get(gridFocusedSessionId || activeSessionId);
   if (!currentCard || !cards.includes(currentCard)) {
     for (const [sid, card] of gridCards) {
-      if (card === cards[0]) { focusGridCard(sid); return; }
+      if (card === cards[0]) {
+        focusGridCard(sid);
+        return;
+      }
     }
     return;
   }
@@ -1785,10 +1919,18 @@ function navigateGrid(direction) {
     const dy = cy - curCy;
     let valid = false;
     switch (direction) {
-      case 'left':  valid = dx < -10; break;
-      case 'right': valid = dx > 10; break;
-      case 'up':    valid = dy < -10; break;
-      case 'down':  valid = dy > 10; break;
+      case 'left':
+        valid = dx < -10;
+        break;
+      case 'right':
+        valid = dx > 10;
+        break;
+      case 'up':
+        valid = dy < -10;
+        break;
+      case 'down':
+        valid = dy > 10;
+        break;
     }
     if (!valid) continue;
     // For left/right prefer same row (small dy), for up/down prefer same column (small dx)
@@ -1805,7 +1947,10 @@ function navigateGrid(direction) {
   }
   if (!best) return;
   for (const [sid, card] of gridCards) {
-    if (card === best) { focusGridCard(sid); return; }
+    if (card === best) {
+      focusGridCard(sid);
+      return;
+    }
   }
 }
 
@@ -1814,9 +1959,14 @@ function isSessionNavKey(e) {
   const mod = isMac ? e.metaKey : e.ctrlKey;
   if (!mod || e.altKey) return false;
   if (e.shiftKey && (e.code === 'BracketLeft' || e.code === 'BracketRight')) return true;
-  if (!e.shiftKey && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return true;
+  if (!e.shiftKey && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key))
+    return true;
   // Cmd/Ctrl+Shift+A — focus next attention (let it through while a terminal is focused)
-  if (typeof isNextAttentionKey === 'function' && isNextAttentionKey(e, nextAttentionBindingForNav())) return true;
+  if (
+    typeof isNextAttentionKey === 'function' &&
+    isNextAttentionKey(e, nextAttentionBindingForNav())
+  )
+    return true;
   return false;
 }
 
@@ -1831,7 +1981,10 @@ function handleSessionNavKey(e) {
   if (!mod || e.altKey) return false;
 
   // Cmd/Ctrl+Shift+A — focus next session needing attention
-  if (typeof isNextAttentionKey === 'function' && isNextAttentionKey(e, nextAttentionBindingForNav())) {
+  if (
+    typeof isNextAttentionKey === 'function' &&
+    isNextAttentionKey(e, nextAttentionBindingForNav())
+  ) {
     e.preventDefault();
     if (e.type === 'keydown' && typeof focusNextAttention === 'function') focusNextAttention();
     return true;
@@ -1853,7 +2006,7 @@ function handleSessionNavKey(e) {
         const dirMap = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
         navigateGrid(dirMap[e.key]);
       } else {
-        const dir = (e.key === 'ArrowLeft' || e.key === 'ArrowUp') ? -1 : 1;
+        const dir = e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 1;
         navigateSession(dir);
       }
     }

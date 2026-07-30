@@ -78,6 +78,202 @@ async function readLatestHandoffPacket(session) {
   return '';
 }
 
+async function showContextTransferDialog(session) {
+  const project = findProjectForSession(session);
+  const latest = await readLatestHandoffPacket(session);
+  const packet = buildContextTransferPacket(
+    session,
+    latest || buildHandoffTemplate(session),
+  );
+  const targets = getTransferTargets(
+    Array.from(sessionMap.values()).map(candidate => ({
+      ...candidate,
+      isRunning: activePtyIds.has(candidate.sessionId),
+    })),
+    session.sessionId,
+  );
+
+  const overlay = document.createElement('div');
+  overlay.className = 'new-session-overlay';
+  overlay.setAttribute('role', 'presentation');
+
+  const dialog = document.createElement('div');
+  dialog.className = 'new-session-dialog context-transfer-dialog';
+  dialog.setAttribute('role', 'dialog');
+  dialog.setAttribute('aria-modal', 'true');
+  dialog.setAttribute('aria-labelledby', 'context-transfer-title');
+  dialog.innerHTML = `
+    <h3 id="context-transfer-title">Send Context</h3>
+    <div class="add-project-hint">Review the packet before sending it. Starting or prompting a session can spend tokens; the source session remains unchanged.</div>
+    <label class="settings-field settings-field-wide">
+      <span class="settings-field-info">
+        <span class="settings-label">Destination</span>
+        <span class="settings-description">Create a clean session or prompt an active one.</span>
+      </span>
+      <span class="settings-field-control">
+        <select id="context-transfer-target" class="settings-input">
+          <option value="__new__">New clean session in this project</option>
+          ${targets
+            .map(
+              target =>
+                `<option value="${escapeHtml(target.id)}">${escapeHtml(target.label)} — ${escapeHtml(target.project)} (${escapeHtml(target.runtime)})</option>`,
+            )
+            .join('')}
+        </select>
+      </span>
+    </label>
+    <label class="settings-field settings-field-wide context-transfer-packet">
+      <span class="settings-label">Context packet</span>
+      <textarea id="context-transfer-text" class="settings-input" spellcheck="false"></textarea>
+    </label>
+    <div class="new-session-actions">
+      <button type="button" class="new-session-cancel-btn">Cancel</button>
+      <button type="button" class="new-session-start-btn">Send context</button>
+    </div>
+  `;
+
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+
+  const select = dialog.querySelector('#context-transfer-target');
+  const textarea = dialog.querySelector('#context-transfer-text');
+  const submit = dialog.querySelector('.new-session-start-btn');
+  textarea.value = packet;
+  textarea.focus();
+  textarea.setSelectionRange(0, 0);
+
+  function close() {
+    overlay.remove();
+    document.removeEventListener('keydown', onKey);
+  }
+
+  async function send() {
+    const content = textarea.value.trim();
+    if (!content) {
+      showControlToast({ message: 'Add some context before sending.' });
+      textarea.focus();
+      return;
+    }
+
+    submit.disabled = true;
+    const targetId = select.value;
+    try {
+      if (targetId === '__new__') {
+        if (!project) {
+          showControlToast({ message: 'The source project is unavailable.' });
+          submit.disabled = false;
+          return;
+        }
+        const runtime = session.runtime || 'claude';
+        const options = await resolveLaunchOptions(runtime, project);
+        await launchNewSession(project, options, content);
+      } else {
+        // Bracketed paste keeps newlines and shell metacharacters as terminal
+        // input instead of letting the active TUI interpret partial chunks.
+        window.api.sendInput(targetId, `\x1b[200~${content}\x1b[201~\r`);
+        showControlToast({ message: 'Context sent to the active session.' });
+      }
+      close();
+    } catch (error) {
+      console.error('Context transfer failed:', error);
+      showControlToast({ message: 'Context transfer failed. Nothing was changed.' });
+      submit.disabled = false;
+    }
+  }
+
+  function onKey(event) {
+    if (event.key === 'Escape') close();
+    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') send();
+  }
+
+  dialog.querySelector('.new-session-cancel-btn').onclick = close;
+  submit.onclick = send;
+  overlay.addEventListener('click', event => {
+    if (event.target === overlay) close();
+  });
+  document.addEventListener('keydown', onKey);
+}
+
+async function showSessionAnnotationsDialog(session) {
+  const current = await window.api.getSessionAnnotations(session.sessionId);
+  const overlay = document.createElement('div');
+  overlay.className = 'new-session-overlay';
+
+  const dialog = document.createElement('div');
+  dialog.className = 'new-session-dialog session-annotations-dialog';
+  dialog.setAttribute('role', 'dialog');
+  dialog.setAttribute('aria-modal', 'true');
+  dialog.setAttribute('aria-labelledby', 'session-annotations-title');
+  dialog.innerHTML = `
+    <h3 id="session-annotations-title">Notes &amp; Tags</h3>
+    <div class="add-project-hint">Private, local metadata for ${escapeHtml(
+      cleanDisplayName(session.name || session.aiTitle || session.summary) || session.sessionId,
+    )}. It is never written into the agent transcript.</div>
+    <label class="settings-field settings-field-wide session-annotations-note">
+      <span class="settings-label">Notes</span>
+      <textarea id="session-annotations-note" class="settings-input" rows="8" placeholder="Decisions, follow-ups, or review notes…"></textarea>
+    </label>
+    <label class="settings-field settings-field-wide">
+      <span class="settings-field-info">
+        <span class="settings-label">Tags</span>
+        <span class="settings-description">Comma-separated labels used for local organization.</span>
+      </span>
+      <span class="settings-field-control">
+        <input id="session-annotations-tags" class="settings-input" type="text" placeholder="checkout, review, urgent">
+      </span>
+    </label>
+    <div class="new-session-actions">
+      <button type="button" class="new-session-cancel-btn">Cancel</button>
+      <button type="button" class="new-session-start-btn">Save</button>
+    </div>
+  `;
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+
+  const noteInput = dialog.querySelector('#session-annotations-note');
+  const tagsInput = dialog.querySelector('#session-annotations-tags');
+  const saveButton = dialog.querySelector('.new-session-start-btn');
+  noteInput.value = current?.note || '';
+  tagsInput.value = Array.isArray(current?.tags) ? current.tags.join(', ') : '';
+  noteInput.focus();
+
+  function close() {
+    document.removeEventListener('keydown', onKey);
+    overlay.remove();
+  }
+
+  async function save() {
+    saveButton.disabled = true;
+    const result = await window.api.setSessionAnnotations(session.sessionId, {
+      note: noteInput.value,
+      tags: tagsInput.value
+        .split(',')
+        .map(tag => tag.trim())
+        .filter(Boolean),
+    });
+    if (!result?.ok) {
+      saveButton.disabled = false;
+      showControlToast({ message: result?.error || 'Could not save session notes.' });
+      return;
+    }
+    session.tags = result.tags;
+    close();
+    showControlToast({ message: 'Session notes and tags saved locally.' });
+  }
+
+  function onKey(event) {
+    if (event.key === 'Escape') close();
+    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') save();
+  }
+
+  dialog.querySelector('.new-session-cancel-btn').onclick = close;
+  saveButton.onclick = save;
+  overlay.addEventListener('click', event => {
+    if (event.target === overlay) close();
+  });
+  document.addEventListener('keydown', onKey);
+}
+
 // Follow-up dialog that lets the human review/edit the captured handoff packet
 // before a fresh session is started. Resolves with the edited text, or null on
 // cancel. Prefilled by reading the latest assistant turn from the session JSONL
