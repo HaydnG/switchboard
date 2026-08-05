@@ -370,7 +370,7 @@ describe('renderer application shell', () => {
     expect(events).toEqual([{ action: 'open-view', view: 'plans' }]);
   });
 
-  it('mounts the shell while preserving legacy status bar ids', () => {
+  it('mounts React islands without replacing the legacy release shell', () => {
     render(<App />);
 
     expect(document.getElementById('status-bar')).toBeTruthy();
@@ -378,6 +378,8 @@ describe('renderer application shell', () => {
     expect(document.getElementById('status-bar-usage')).toBeTruthy();
     expect(document.getElementById('status-bar-activity')).toBeTruthy();
     expect(document.getElementById('status-bar-updater')).toBeTruthy();
-    expect(screen.getByRole('navigation', { name: 'Workspace' })).toBeTruthy();
+    expect(document.getElementById('sidebar')).toBeTruthy();
+    expect(screen.queryByRole('navigation', { name: 'Workspace' })).toBeNull();
+    expect(document.body.classList.contains('sb-shell-active')).toBe(false);
   });
 });

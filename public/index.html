@@ -6,16 +6,9 @@
   <title>Switchboard</title>
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">
   <link rel="stylesheet" href="style.css">
-  <link rel="stylesheet" href="dist/react-app.css">
 </head>
-<body class="sb-shell-booting">
-  <div id="sb-shell-boot-screen" role="status" aria-label="Loading Switchboard">
-    <span class="sb-shell-boot-mark">S</span>
-    <strong>Switchboard</strong>
-    <span class="sb-shell-boot-progress"><i></i></span>
-  </div>
+<body>
   <div id="app-container">
-  <div id="react-shell-sidebar"></div>
   <div id="sidebar">
     <button id="sidebar-expand-btn" title="Show sidebar"><svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 24 24" height="20" width="20" xmlns="http://www.w3.org/2000/svg"><path d="M18 3a3 3 0 0 1 2.995 2.824l.005 .176v12a3 3 0 0 1 -2.824 2.995l-.176 .005h-12a3 3 0 0 1 -2.995 -2.824l-.005 -.176v-12a3 3 0 0 1 2.824 -2.995l.176 -.005h12zm-3 2h-9a1 1 0 0 0 -.993 .883l-.007 .117v12a1 1 0 0 0 .883 .993l.117 .007h9v-14zm-5.387 4.21l.094 .083l2 2a1 1 0 0 1 .083 1.32l-.083 .094l-2 2a1 1 0 0 1 -1.497 -1.32l.083 -.094l1.292 -1.293l-1.292 -1.293a1 1 0 0 1 -.083 -1.32l.083 -.094a1 1 0 0 1 1.32 -.083z"></path></svg></button>
     <div id="sidebar-header">
@@ -54,7 +47,6 @@
   </div>
   <div id="sidebar-resize-handle"></div>
   <div id="main">
-    <div id="react-shell-topbar"></div>
     <div id="placeholder">
       <p>Select a session from the sidebar to begin.</p>
     </div>
@@ -118,7 +110,6 @@
       <div id="terminals"></div>
     </div>
   </div>
-  <div id="react-shell-inspector"></div>
   </div><!-- /app-container -->
   <div id="react-root"></div>
   <div id="app-live-region" class="visually-hidden" aria-live="polite" aria-atomic="true"></div>
