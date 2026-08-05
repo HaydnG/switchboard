@@ -288,20 +288,13 @@ function createWindow() {
             react: !!document.getElementById('react-root'),
             sidebar: !!document.getElementById('sidebar'),
             status: !!document.getElementById('status-bar'),
-            shellActive: document.body.classList.contains('sb-shell-active'),
-            shellBootComplete: !document.body.classList.contains('sb-shell-booting')
-              && getComputedStyle(document.getElementById('sb-shell-boot-screen')).display === 'none',
-            shellSidebar: !!document.querySelector('#react-shell-sidebar .sb-app-sidebar'),
-            shellTopbar: !!document.querySelector('#react-shell-topbar .sb-workspace-topbar'),
-            shellDashboard: !!document.querySelector('#placeholder .sb-dashboard'),
-            legacySidebarHidden: getComputedStyle(document.getElementById('sidebar')).display === 'none',
-            shellSidebarVisible: getComputedStyle(document.getElementById('react-shell-sidebar')).display !== 'none',
-            sidebarControlsClear: (() => {
-              const controls = document.querySelector('.sb-sidebar-controls');
-              const sessions = document.querySelector('.sb-sidebar-sessions');
-              return !!controls && !!sessions
-                && controls.getBoundingClientRect().bottom <= sessions.getBoundingClientRect().top + 1;
-            })()
+            shellInactive: !document.body.classList.contains('sb-shell-active'),
+            shellSlotsAbsent: !document.getElementById('react-shell-sidebar')
+              && !document.getElementById('react-shell-topbar')
+              && !document.getElementById('react-shell-inspector'),
+            legacySidebarVisible: getComputedStyle(document.getElementById('sidebar')).display !== 'none',
+            legacyIconTabs: document.querySelectorAll('#sidebar-tabs .sidebar-tab').length === 4,
+            legacySessionList: !!document.getElementById('sidebar-content')
           })`);
           const ready = Object.values(state).every(Boolean) && smokeErrors.length === 0;
           if (ready) {
@@ -311,75 +304,15 @@ function createWindow() {
               );
               await new Promise(resolve => setTimeout(resolve, 150));
             } else if (process.env.SWITCHBOARD_SMOKE_VIEW === 'groups') {
-              const now = new Date().toISOString();
-              const sessions = [
-                {
-                  id: 'ops-1', name: 'Investigate checkout alerts', projectPath: '/Projects/checkout',
-                  runtime: 'omp', status: 'needs-attention', statusLabel: 'Needs You',
-                  health: 'handoff-recommended', healthLabel: 'Handoff Recommended',
-                  running: true, starred: true, archived: false, modified: now,
-                  messageCount: 180, turnCount: 38, activeMinutes: 620, cacheReadTokens: 1200,
-                  groupId: 'ops', groupName: 'OnCall / Ops Health', groupColor: '#ef476f',
-                  groupOrder: 1, task: 'Review production findings',
-                },
-                {
-                  id: 'ops-2', name: 'Prepare operations health review', projectPath: '/Projects/checkout',
-                  runtime: 'claude', status: 'running', statusLabel: 'Working',
-                  health: 'marathon-risk', healthLabel: 'Marathon Risk',
-                  running: true, starred: false, archived: false, modified: now,
-                  messageCount: 96, turnCount: 18, activeMinutes: 300, cacheReadTokens: 800,
-                  groupId: 'ops', groupName: 'OnCall / Ops Health', groupColor: '#ef476f',
-                  groupOrder: 1, task: 'Draft review presentation',
-                },
-                {
-                  id: 'perf-1', name: 'Profile checkout rendering', projectPath: '/Projects/web',
-                  runtime: 'claude', status: 'response-ready', statusLabel: 'Ready',
-                  health: 'healthy', healthLabel: 'Healthy', running: false, starred: false,
-                  archived: false, modified: now, messageCount: 72, turnCount: 12,
-                  activeMinutes: 94, cacheReadTokens: 340, groupId: 'performance',
-                  groupName: 'Performance Review', groupColor: '#f4a261', groupOrder: 2,
-                  task: 'Results ready to review',
-                },
-                {
-                  id: 'capture-1', name: 'Build address capture flow', projectPath: '/Projects/web',
-                  runtime: 'pi', status: 'running', statusLabel: 'Working',
-                  health: 'marathon-risk', healthLabel: 'Marathon Risk', running: true,
-                  starred: false, archived: false, modified: now, messageCount: 110,
-                  turnCount: 21, activeMinutes: 180, cacheReadTokens: 600, groupId: 'capture',
-                  groupName: 'Address Capture', groupColor: '#22b8cf', groupOrder: 3,
-                  task: 'Implement form validation',
-                },
-              ];
-              const detail = {
-                total: sessions.length, running: 3, attention: 2, ready: 1,
-                activeSessionId: 'ops-1', gridViewActive: false, workspaceView: 'timeline',
-                groups: [
-                  { id: 'ops', name: 'OnCall / Ops Health', color: '#ef476f', order: 1, sessionCount: 2 },
-                  { id: 'performance', name: 'Performance Review', color: '#f4a261', order: 2, sessionCount: 1 },
-                  { id: 'capture', name: 'Address Capture', color: '#22b8cf', order: 3, sessionCount: 1 },
-                  { id: 'empty', name: 'Empty Drop Target', color: '#8088ff', order: 4, sessionCount: 0 },
-                ],
-                sessions, updatedAt: Date.now(),
-              };
-              await mainWindow.webContents.executeJavaScript(
-                `window.dispatchEvent(new CustomEvent('switchboard:session-overview', { detail: ${JSON.stringify(detail)} })); void 0`,
-              );
-              await new Promise(resolve => setTimeout(resolve, 150));
-              const groupedSidebarReady = await mainWindow.webContents.executeJavaScript(`(() => {
-                const text = document.querySelector('#react-shell-sidebar')?.textContent || '';
-                return text.includes('OnCall / Ops Health')
-                  && text.includes('Performance Review')
-                  && text.includes('Attention')
-                  && text.includes('Review production findings')
-                  && text.includes('Approve')
-                  && text.includes('Pinned')
-                  && text.includes('Archived')
-                  && text.includes('New folder')
-                  && document.querySelector('#react-shell-inspector')?.textContent.includes('Back to session')
-                  && document.querySelector('#react-shell-inspector')?.textContent.includes('New folder');
+              const legacySidebarReady = await mainWindow.webContents.executeJavaScript(`(() => {
+                const sidebar = document.getElementById('sidebar');
+                return !!sidebar
+                  && getComputedStyle(sidebar).display !== 'none'
+                  && document.querySelectorAll('#sidebar-tabs .sidebar-tab').length === 4
+                  && !!document.getElementById('sidebar-content');
               })()`);
-              if (!groupedSidebarReady) {
-                throw new Error('Grouped React sidebar did not render expected folders and filters');
+              if (!legacySidebarReady) {
+                throw new Error('Legacy sidebar did not render expected navigation and session list');
               }
             }
             if (smokeErrors.length > 0) {
