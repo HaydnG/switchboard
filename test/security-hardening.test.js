@@ -28,14 +28,17 @@ test('project path authorization permits project files and relative paths', (t) 
   const filePath = path.join(project, 'src', 'index.js');
   fs.mkdirSync(path.dirname(filePath));
   fs.writeFileSync(filePath, 'ok');
+  const canonicalFilePath = fs.realpathSync.native
+    ? fs.realpathSync.native(filePath)
+    : fs.realpathSync(filePath);
 
   assert.deepEqual(authorizeProjectPath(filePath, [project]), {
     ok: true,
-    path: fs.realpathSync(filePath),
+    path: canonicalFilePath,
   });
   assert.deepEqual(authorizeProjectPath('src/index.js', [project]), {
     ok: true,
-    path: fs.realpathSync(filePath),
+    path: canonicalFilePath,
   });
 });
 

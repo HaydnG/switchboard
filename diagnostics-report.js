@@ -11,8 +11,13 @@ const SECRET_PATTERNS = [
 function redactDiagnosticsText(value, homeDirectory) {
   let output = String(value || '');
   if (homeDirectory) {
-    const normalizedHome = path.resolve(homeDirectory);
-    output = output.split(normalizedHome).join('~');
+    const homes = new Set([String(homeDirectory), path.resolve(homeDirectory)]);
+    for (const home of homes) {
+      if (!home) continue;
+      output = output.split(home).join('~');
+      output = output.split(home.replace(/\\/g, '/')).join('~');
+      output = output.split(home.replace(/\//g, '\\')).join('~');
+    }
   }
   for (const pattern of SECRET_PATTERNS) {
     output = output.replace(pattern, (_match, prefix) =>
