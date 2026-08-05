@@ -144,6 +144,7 @@ function renderGridStatusFilters() {
     ['attention', 'Needs You', counts.attention],
     ['ready', 'Ready', counts.ready],
     ['active', 'Running', counts.active],
+    ['stale', 'Stale', counts.staleOpen],
   ];
 
   container.innerHTML = '';
@@ -552,12 +553,16 @@ function wrapInGridCard(sessionId, parent, layout) {
   const shortProject = session.projectPath
     ? session.projectPath.split('/').filter(Boolean).slice(-2).join('/')
     : '';
-  const status = getSessionStatus(session, getGridRuntimeState());
+  const runtimeState = getGridRuntimeState();
+  const status = getSessionStatus(session, runtimeState);
+  const staleOpen = isStaleOpenSession(session, runtimeState);
+  const statusLabel = staleOpen ? `${status.label} · 2d+ idle` : status.label;
   const health = getSessionHealth(session);
 
   // Create card wrapper
   const card = document.createElement('div');
   card.className = `grid-card ${status.className} ${health.className}`;
+  if (staleOpen) card.classList.add('stale-open');
   card.dataset.sessionId = sessionId;
 
   // Apply persisted span (spec 08). Defaults to 1x1.
@@ -590,7 +595,8 @@ function wrapInGridCard(sessionId, parent, layout) {
   header.appendChild(name);
   const statusChip = document.createElement('span');
   statusChip.className = `status-pill grid-card-status-chip ${status.className}`;
-  statusChip.textContent = status.label;
+  statusChip.textContent = statusLabel;
+  if (staleOpen) statusChip.title = 'Open with no activity for over 2 days';
   header.appendChild(statusChip);
   if (health.state !== 'healthy') {
     const healthChip = document.createElement('button');
@@ -645,6 +651,7 @@ function wrapInGridCard(sessionId, parent, layout) {
   const footer = document.createElement('div');
   footer.className = 'grid-card-footer';
   const statusSpan = document.createElement('span');
+  statusSpan.textContent = statusLabel;
   const timeSpan = document.createElement('span');
   timeSpan.textContent = formatDate(lastActivityTime.get(sessionId) || new Date(session.modified));
   footer.appendChild(statusSpan);
@@ -1452,7 +1459,10 @@ function updateGridCardStatuses() {
   for (const [sid, card] of gridCards) {
     const session = sessionMap.get(sid) || openSessions.get(sid)?.session;
     if (!session) continue;
-    const status = getSessionStatus(session, getGridRuntimeState());
+    const runtimeState = getGridRuntimeState();
+    const status = getSessionStatus(session, runtimeState);
+    const staleOpen = isStaleOpenSession(session, runtimeState);
+    const statusLabel = staleOpen ? `${status.label} · 2d+ idle` : status.label;
     const health = getSessionHealth(session);
     const running =
       status.key === 'running' ||
@@ -1479,16 +1489,19 @@ function updateGridCardStatuses() {
       'status-running',
       'status-exited',
       'status-idle',
+      'stale-open',
       'health-healthy',
       'health-growing',
       'health-marathon-risk',
       'health-handoff-recommended',
     );
     card.classList.add(status.className, health.className);
+    card.classList.toggle('stale-open', staleOpen);
     const chip = card.querySelector('.grid-card-status-chip');
     if (chip) {
       chip.className = `status-pill grid-card-status-chip ${status.className}`;
-      chip.textContent = status.label;
+      chip.textContent = statusLabel;
+      chip.title = staleOpen ? 'Open with no activity for over 2 days' : '';
     }
     const healthChip = card.querySelector('.grid-card-health-chip');
     if (healthChip) {
@@ -1497,7 +1510,7 @@ function updateGridCardStatuses() {
       healthChip.style.display = health.state === 'healthy' ? 'none' : '';
     }
     const footer = card.querySelector('.grid-card-footer');
-    if (footer && footer.children[0]) footer.children[0].textContent = status.label;
+    if (footer && footer.children[0]) footer.children[0].textContent = statusLabel;
     // Quick actions track status; only touch the DOM when the action set changed
     // (rebuilding every tick would kill an in-flight click/focus).
     if (footer && typeof buildQuickActionsBar === 'function') {
