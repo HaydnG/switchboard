@@ -425,8 +425,9 @@ function buildAttentionInbox(projects) {
     const agentTask = agentTaskBySession.get(session.sessionId)
       || openSessions.get(session.sessionId)?.agentTask
       || '';
-    const taskLine = agentTask
-      ? `<span class="attention-inbox-task" title="${escapeHtml(agentTask)}">${escapeHtml(agentTask)}</span>`
+    const reservesTaskLine = status.key === 'busy' || status.key === 'running';
+    const taskLine = reservesTaskLine
+      ? `<span class="attention-inbox-task${agentTask ? '' : ' is-empty'}" title="${escapeHtml(agentTask)}">${agentTask ? escapeHtml(agentTask) : '&nbsp;'}</span>`
       : '';
     row.innerHTML = `
       <span class="status-pill attention-inbox-status">${escapeHtml(status.label)}</span>
@@ -1740,9 +1741,13 @@ function buildSessionItem(session) {
   const modified = lastActivityTime.get(session.sessionId) || new Date(session.modified);
   const timeStr = formatDate(modified);
   const displayName = cleanDisplayName(session.name || session.aiTitle || session.summary);
-  const status = getSessionStatus(session, getSessionRuntimeState());
+  const runtimeState = getSessionRuntimeState();
+  const status = getSessionStatus(session, runtimeState);
+  const staleOpen = isStaleOpenSession(session, runtimeState);
+  const statusLabel = staleOpen ? `${status.label} · 2d+ idle` : status.label;
   const health = getSessionHealth(session);
   item.classList.add(status.className);
+  if (staleOpen) item.classList.add('stale-open');
   item.classList.add(health.className);
 
   const row = document.createElement('div');
@@ -1779,7 +1784,8 @@ function buildSessionItem(session) {
 
   const statusChip = document.createElement('span');
   statusChip.className = `session-detail-pill session-status-chip ${status.className}`;
-  statusChip.textContent = status.label;
+  statusChip.textContent = statusLabel;
+  if (staleOpen) statusChip.title = 'Open with no activity for over 2 days';
   detailEl.appendChild(statusChip);
   if (health.state !== 'healthy') {
     const healthChip = document.createElement('button');

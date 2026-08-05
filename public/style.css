@@ -1233,11 +1233,16 @@ input:focus-visible {
   grid-column: 2;
   grid-row: 2;
   min-width: 0;
+  min-height: 14px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: #b7b7ca;
   font-size: 10.5px;
+}
+
+.attention-inbox-task.is-empty {
+  visibility: hidden;
 }
 
 .attention-inbox-meta {
@@ -7226,4 +7231,50 @@ body.grid-dragging .grid-card-header {
 
 .sidebar-selection-archive {
   color: #ffd09a !important;
+}
+
+/* ========== STALE OPEN SESSIONS ========== */
+.session-item.stale-open .session-row {
+  box-shadow: inset 2px 0 0 rgba(240,160,80,0.8);
+}
+
+.session-item.stale-open .session-status-dot.running,
+.grid-card.stale-open .grid-card-dot {
+  background: #f0a050;
+  box-shadow: 0 0 6px rgba(240,160,80,0.45);
+  animation: none;
+}
+
+.session-item.stale-open.cli-busy .session-status-dot,
+.session-item.stale-open.cli-busy .session-status-dot.running {
+  background: #f0a050 !important;
+  border: 0;
+  animation: none !important;
+}
+
+.session-item.stale-open .session-status-chip,
+.grid-card.stale-open .grid-card-status-chip {
+  color: #ffd6a0;
+  background: rgba(240,160,80,0.18);
+  border-color: rgba(240,160,80,0.28);
+}
+
+.grid-card.stale-open .grid-card-header {
+  background: rgba(240,160,80,0.08);
+  box-shadow: inset 3px 0 0 rgba(240,160,80,0.85);
+}
+
+.grid-card.stale-open .grid-card-footer > :last-child {
+  color: #d8a05e;
+}
+
+.grid-status-filter[data-filter="stale"]:not(:disabled) {
+  color: #d8a05e;
+  border-color: rgba(240,160,80,0.25);
+}
+
+.grid-status-filter[data-filter="stale"].active {
+  color: #ffd6a0;
+  background: rgba(240,160,80,0.18);
+  border-color: rgba(240,160,80,0.45);
 }

@@ -301,6 +301,9 @@ const responseReadySessions = new Set(); // Claude finished, user hasn't looked 
 const sessionBusyState = new Map(); // sessionId → boolean (currently active)
 const agentTaskBySession = new Map(); // sessionId → current task shown by the agent UI
 const agentTaskTimers = new Map(); // sessionId → idle timeout
+const authoritativeBusyState = new Map(); // sessionId → OSC 0 busy signal
+const authoritativeBusyTimers = new Map(); // sessionId → missed-idle safety timeout
+const AUTHORITATIVE_BUSY_TIMEOUT_MS = 5000;
 const lastActivityTime = new Map(); // sessionId → Date of last terminal output
 const inboxArrivalTime = new Map(); // sessionId → timestamp of its current actionable state
 const lastViewedTime = new Map(); // sessionId → Date the session last became focused
@@ -673,13 +676,29 @@ function setActivity(sessionId, active) {
 // OMP redraws its spinner/status line continuously while working. Treat the
 // latest matching redraw as a liveness signal so it can share Claude's Working
 // / Open status model without requiring an OSC title.
+function updateAttentionInboxTask(sessionId, task) {
+  const row = document.querySelector(`.attention-inbox-item[data-session-id="${sessionId}"]`);
+  if (!row) return false;
+  const taskEl = row.querySelector('.attention-inbox-task');
+  if (!taskEl) {
+    return !row.classList.contains('status-busy') && !row.classList.contains('status-running');
+  }
+  const next = task || '';
+  taskEl.textContent = next || '\u00a0';
+  taskEl.title = next;
+  taskEl.classList.toggle('is-empty', !next);
+  return true;
+}
+
 function updateAgentTask(sessionId, task) {
   const current = agentTaskBySession.get(sessionId) || '';
   const next = task || '';
   if (current !== next) {
     if (next) agentTaskBySession.set(sessionId, next);
     else agentTaskBySession.delete(sessionId);
-    scheduleSessionStatusViewsRefresh();
+    if (!updateAttentionInboxTask(sessionId, next)) {
+      scheduleSessionStatusViewsRefresh();
+    }
   }
 
   const existingTimer = agentTaskTimers.get(sessionId);
@@ -692,6 +711,7 @@ function updateAgentTask(sessionId, task) {
   setActivity(sessionId, true);
   agentTaskTimers.set(sessionId, setTimeout(() => {
     agentTaskTimers.delete(sessionId);
+    if (!shouldEndTaskFallbackActivity(authoritativeBusyState.get(sessionId))) return;
     updateAgentTask(sessionId, '');
     setActivity(sessionId, false);
   }, 2000));
@@ -1231,6 +1251,20 @@ window.api.onAttentionSignal((signal) => {
 
 // --- CLI busy state (OSC 0 title spinner detection) ---
 window.api.onCliBusyState((sessionId, busy) => {
+  const existingTimer = authoritativeBusyTimers.get(sessionId);
+  if (existingTimer) clearTimeout(existingTimer);
+  authoritativeBusyTimers.delete(sessionId);
+  authoritativeBusyState.set(sessionId, busy);
+  if (busy) {
+    authoritativeBusyTimers.set(sessionId, setTimeout(() => {
+      authoritativeBusyTimers.delete(sessionId);
+      authoritativeBusyState.set(sessionId, false);
+      updateAgentTask(sessionId, '');
+      setActivity(sessionId, false);
+    }, AUTHORITATIVE_BUSY_TIMEOUT_MS));
+  } else {
+    updateAgentTask(sessionId, '');
+  }
   setActivity(sessionId, busy);
 });
 
@@ -1675,6 +1709,10 @@ function updateRunningIndicators() {
       inboxArrivalTime.delete(id);
       sessionBusyState.delete(id);
       agentTaskBySession.delete(id);
+      authoritativeBusyState.delete(id);
+      const authoritativeTimer = authoritativeBusyTimers.get(id);
+      if (authoritativeTimer) clearTimeout(authoritativeTimer);
+      authoritativeBusyTimers.delete(id);
       const taskTimer = agentTaskTimers.get(id);
       if (taskTimer) clearTimeout(taskTimer);
       agentTaskTimers.delete(id);

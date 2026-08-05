@@ -8,6 +8,7 @@ const { pathToFileURL } = require('url');
 const pty = require('node-pty');
 const log = require('electron-log');
 const attentionSource = require('./public/attention-source');
+const { getCliBusySignalFromTitle } = require('./public/session-status');
 // getFolderIndexMtimeMs moved to session-cache.js
 const { startMcpServer, shutdownMcpServer, shutdownAll: shutdownAllMcp, resolvePendingDiff, rekeyMcpServer, cleanStaleLockFiles } = require('./mcp-bridge');
 const { fetchAndTransformUsage } = require('./claude-auth');
@@ -1795,25 +1796,39 @@ ipcMain.handle('open-terminal', async (event, sessionId, projectPath, isNew, ses
         const payload = m[2].slice(0, 120);
         // Detect Claude CLI busy state from window-title OSC sequences. Terminals
         // and CLI versions commonly use OSC 0, 1, or 2 for the same title.
-        // Braille spinner chars mean work is in progress; ✳ means the CLI is idle.
+        // Braille spinner chars mean work is in progress. Any subsequent
+        // non-spinner title ends that busy period; newer CLI versions do not
+        // consistently restore the historical ✳ idle title.
         if (code === '0' || code === '1' || code === '2') {
           const firstChar = payload.charAt(0);
-          const isBusy = firstChar.charCodeAt(0) >= 0x2800 && firstChar.charCodeAt(0) <= 0x28FF;
-          const isIdle = firstChar === '\u2733'; // ✳
-          log.debug(`[OSC 0] session=${currentId} char=U+${firstChar.charCodeAt(0).toString(16).toUpperCase()} busy=${isBusy} idle=${isIdle} wasBusy=${!!session._cliBusy}`);
-          if (isBusy && !session._cliBusy) {
+          const busyTitleCodes = session._busyTitleCodes || new Set();
+          session._busyTitleCodes = busyTitleCodes;
+          const codeWasBusy = busyTitleCodes.has(code);
+          const busySignal = getCliBusySignalFromTitle(payload, codeWasBusy);
+          const now = Date.now();
+          const wasBusy = !!session._cliBusy;
+          const shouldHeartbeat = busySignal === true
+            && (!wasBusy || now - (session._lastBusyHeartbeatAt || 0) >= 1000);
+          log.debug(`[OSC ${code}] session=${currentId} char=U+${firstChar.charCodeAt(0).toString(16).toUpperCase()} signal=${busySignal} codeWasBusy=${codeWasBusy} wasBusy=${wasBusy}`);
+          if (busySignal === true) {
+            busyTitleCodes.add(code);
             session._cliBusy = true;
             session._oscIdle = false;
-            log.debug(`[OSC 0] session=${currentId} → BUSY`);
-            if (mainWindow && !mainWindow.isDestroyed()) {
+            if (!wasBusy) log.debug(`[OSC ${code}] session=${currentId} → BUSY`);
+            if (shouldHeartbeat && mainWindow && !mainWindow.isDestroyed()) {
+              session._lastBusyHeartbeatAt = now;
               mainWindow.webContents.send('cli-busy-state', currentId, true);
             }
-          } else if (isIdle && session._cliBusy) {
-            session._cliBusy = false;
-            session._oscIdle = true;
-            log.debug(`[OSC 0] session=${currentId} → IDLE`);
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send('cli-busy-state', currentId, false);
+          } else if (busySignal === false && codeWasBusy) {
+            busyTitleCodes.delete(code);
+            if (busyTitleCodes.size === 0 && wasBusy) {
+              session._cliBusy = false;
+              session._oscIdle = true;
+              session._lastBusyHeartbeatAt = 0;
+              log.debug(`[OSC ${code}] session=${currentId} → IDLE`);
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('cli-busy-state', currentId, false);
+              }
             }
           }
         }
@@ -1827,11 +1842,15 @@ ipcMain.handle('open-terminal', async (event, sessionId, projectPath, isNew, ses
           const level = payload.split(';')[1];
           if (level === '0') continue; // 4;0 is also used for clearing, making it unreliable as an idle signal
           log.debug(`[OSC 9;4] session=${currentId} level=${level} payload="${payload}" wasBusy=${!!session._cliBusy}`);
-          if ((level === '1' || level === '2' || level === '3') && !session._cliBusy) {
+          if (level === '1' || level === '2' || level === '3') {
+            const now = Date.now();
+            const wasBusy = !!session._cliBusy;
+            const shouldHeartbeat = !wasBusy || now - (session._lastBusyHeartbeatAt || 0) >= 1000;
             session._cliBusy = true;
             session._oscIdle = false;
-            log.debug(`[OSC 9;4] session=${currentId} → BUSY`);
-            if (mainWindow && !mainWindow.isDestroyed()) {
+            if (!wasBusy) log.debug(`[OSC 9;4] session=${currentId} → BUSY`);
+            if (shouldHeartbeat && mainWindow && !mainWindow.isDestroyed()) {
+              session._lastBusyHeartbeatAt = now;
               mainWindow.webContents.send('cli-busy-state', currentId, true);
             }
           }
