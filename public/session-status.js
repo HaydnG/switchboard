@@ -95,6 +95,12 @@
     return authoritativeBusy !== true;
   }
 
+  function shouldResumeCompletedSession(completedTask, nextTask) {
+    const previous = typeof completedTask === 'string' ? completedTask : '';
+    const next = typeof nextTask === 'string' ? nextTask : '';
+    return Boolean(previous && next && previous !== next);
+  }
+
   function getSessionStatus(session, runtime = {}) {
     const sessionId = session.sessionId;
     if (hasSetValue(runtime.attentionSessions, sessionId)) return STATUS.needsAttention;
@@ -115,9 +121,9 @@
     return Number.isFinite(time) ? time : 0;
   }
 
-  // Inbox order is established when a session enters an actionable state, not
-  // whenever it emits terminal output. Agents can keep repainting after asking
-  // for input, so activity time would otherwise make cards swap places.
+  // Capture last activity when a session enters the inbox or changes lane. The
+  // frozen timestamp keeps concurrent agents from swapping places on every
+  // terminal repaint while still ordering each lane by recent activity.
   function inboxArrivalTime(session, runtime = {}) {
     const arrival = getMapValue(runtime.inboxArrivalTime, session.sessionId);
     const time = arrival instanceof Date ? arrival.getTime() : Number(arrival);
@@ -136,12 +142,17 @@
     return now - activityTime > thresholdMs;
   }
 
+  function attentionLane(status) {
+    return status.key === 'needs-attention' || status.key === 'response-ready' ? 1 : 0;
+  }
+
   function getAttentionInboxItems(sessions, runtime = {}) {
     return sessions
       .map(session => ({ session, status: getSessionStatus(session, runtime) }))
       .filter(item => item.status.inInbox)
       .sort((a, b) => {
-        if (a.status.priority !== b.status.priority) return b.status.priority - a.status.priority;
+        const laneOrder = attentionLane(b.status) - attentionLane(a.status);
+        if (laneOrder) return laneOrder;
         const order = inboxArrivalTime(b.session, runtime) - inboxArrivalTime(a.session, runtime);
         return order || a.session.sessionId.localeCompare(b.session.sessionId);
       });
@@ -226,6 +237,7 @@
     getCliBusySignalFromTitle,
     getAgentTaskFromTerminalData,
     shouldEndTaskFallbackActivity,
+    shouldResumeCompletedSession,
     getSessionStatus,
     sessionActivityTime,
     isStaleOpenSession,

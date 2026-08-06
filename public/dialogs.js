@@ -170,6 +170,7 @@ async function showContextTransferDialog(session) {
       } else {
         // Bracketed paste keeps newlines and shell metacharacters as terminal
         // input instead of letting the active TUI interpret partial chunks.
+        if (typeof beginAgentTurn === 'function') beginAgentTurn(targetId);
         window.api.sendInput(targetId, `\x1b[200~${content}\x1b[201~\r`);
         showControlToast({ message: 'Context sent to the active session.' });
       }
@@ -343,6 +344,7 @@ async function runHandoff(session, project) {
       // Token step #1 — authorized by the "Hand off (guided)" button. The prompt
       // instructs the agent to return only a markdown handoff and not continue.
       const requestPrompt = buildHandoffRequestPrompt(session);
+      if (typeof beginAgentTurn === 'function') beginAgentTurn(session.sessionId);
       window.api.sendInput(session.sessionId, `\x1b[200~${requestPrompt}\x1b[201~\r`);
       showControlToast({ message: 'Asked the agent for a handoff packet — review it once it finishes.' });
       state = advanceHandoff(state);

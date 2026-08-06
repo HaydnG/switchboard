@@ -6,6 +6,7 @@ const {
   getCliBusySignalFromTitle,
   getAgentTaskFromTerminalData,
   shouldEndTaskFallbackActivity,
+  shouldResumeCompletedSession,
   getSessionStatus,
   isStaleOpenSession,
   getAttentionInboxItems,
@@ -66,6 +67,13 @@ test('task fallback only ends activity without an authoritative busy signal', ()
   assert.equal(shouldEndTaskFallbackActivity(true), false);
   assert.equal(shouldEndTaskFallbackActivity(false), true);
   assert.equal(shouldEndTaskFallbackActivity(undefined), true);
+});
+
+test('completed sessions only resume automatically for a genuinely new task', () => {
+  assert.equal(shouldResumeCompletedSession('Run tests', 'Run tests'), false);
+  assert.equal(shouldResumeCompletedSession('', 'Run tests'), false);
+  assert.equal(shouldResumeCompletedSession('Run tests', ''), false);
+  assert.equal(shouldResumeCompletedSession('Run tests', 'Fix failures'), true);
 });
 
 test('session status prioritizes needs-attention over other states', () => {
@@ -158,7 +166,7 @@ test('recent runtime activity prevents an open session being marked stale', () =
   assert.equal(isStaleOpenSession(session, runtime, { now }), false);
 });
 
-test('attention inbox orders human-critical sessions first then recent activity', () => {
+test('attention inbox puts actionable sessions first and orders each lane by activity', () => {
   const sessions = [
     { sessionId: 'running-old', modified: '2026-06-12T09:00:00.000Z', summary: 'old run' },
     { sessionId: 'ready', modified: '2026-06-12T10:00:00.000Z', summary: 'ready' },
@@ -171,7 +179,7 @@ test('attention inbox orders human-critical sessions first then recent activity'
     attentionSessions: new Set(['attention']),
   }));
 
-  assert.deepEqual(result.map(item => item.session.sessionId), ['attention', 'ready', 'running-old']);
+  assert.deepEqual(result.map(item => item.session.sessionId), ['ready', 'attention', 'running-old']);
 });
 
 test('attention inbox keeps actionable sessions ordered by arrival, not terminal activity', () => {
@@ -196,6 +204,31 @@ test('attention inbox keeps actionable sessions ordered by arrival, not terminal
   assert.deepEqual(result.map(item => item.session.sessionId), ['second', 'first']);
 });
 
+test('working and open status changes do not reshuffle the active lane', () => {
+  const sessions = [
+    { sessionId: 'older', modified: '2026-06-12T09:00:00.000Z' },
+    { sessionId: 'newer', modified: '2026-06-12T10:00:00.000Z' },
+  ];
+  const runtime = state({
+    activePtyIds: new Set(['older', 'newer']),
+    sessionBusyState: new Map([['older', true]]),
+    inboxArrivalTime: new Map([
+      ['older', Date.parse('2026-06-12T10:00:00.000Z')],
+      ['newer', Date.parse('2026-06-12T11:00:00.000Z')],
+    ]),
+  });
+
+  assert.deepEqual(
+    getAttentionInboxItems(sessions, runtime).map(item => item.session.sessionId),
+    ['newer', 'older'],
+  );
+  runtime.sessionBusyState = new Map([['newer', true]]);
+  assert.deepEqual(
+    getAttentionInboxItems(sessions, runtime).map(item => item.session.sessionId),
+    ['newer', 'older'],
+  );
+});
+
 test('next attention inbox item cycles after the current session', () => {
   const sessions = [
     { sessionId: 'running-old', modified: '2026-06-12T09:00:00.000Z', summary: 'old run' },
@@ -208,9 +241,9 @@ test('next attention inbox item cycles after the current session', () => {
     attentionSessions: new Set(['attention']),
   });
 
-  assert.equal(getNextAttentionInboxItem(sessions, runtime, null).session.sessionId, 'attention');
-  assert.equal(getNextAttentionInboxItem(sessions, runtime, 'attention').session.sessionId, 'ready');
-  assert.equal(getNextAttentionInboxItem(sessions, runtime, 'running-old').session.sessionId, 'attention');
+  assert.equal(getNextAttentionInboxItem(sessions, runtime, null).session.sessionId, 'ready');
+  assert.equal(getNextAttentionInboxItem(sessions, runtime, 'ready').session.sessionId, 'attention');
+  assert.equal(getNextAttentionInboxItem(sessions, runtime, 'running-old').session.sessionId, 'ready');
 });
 
 test('next attention inbox item returns null when inbox is empty', () => {

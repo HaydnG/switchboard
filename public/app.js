@@ -300,12 +300,17 @@ const attentionReason = new Map(); // sessionId → { reason, source } — for h
 const responseReadySessions = new Set(); // Claude finished, user hasn't looked (terminal state)
 const sessionBusyState = new Map(); // sessionId → boolean (currently active)
 const agentTaskBySession = new Map(); // sessionId → current task shown by the agent UI
-const agentTaskTimers = new Map(); // sessionId → idle timeout
+const agentTaskTimers = new Map(); // sessionId → fallback activity timeout
+const agentTaskClearTimers = new Map(); // sessionId → delayed message clear
+const completedSessions = new Set(); // sessions locked idle until their next submitted turn
+const completedTaskBySession = new Map(); // sessionId → task visible when completion arrived
 const authoritativeBusyState = new Map(); // sessionId → OSC 0 busy signal
 const authoritativeBusyTimers = new Map(); // sessionId → missed-idle safety timeout
 const AUTHORITATIVE_BUSY_TIMEOUT_MS = 5000;
+const AGENT_TASK_ACTIVITY_TIMEOUT_MS = 5000;
+const AGENT_TASK_CLEAR_DELAY_MS = 8000;
 const lastActivityTime = new Map(); // sessionId → Date of last terminal output
-const inboxArrivalTime = new Map(); // sessionId → timestamp of its current actionable state
+const inboxArrivalTime = new Map(); // sessionId → frozen last-activity timestamp for inbox order
 const lastViewedTime = new Map(); // sessionId → Date the session last became focused
 const filesTouchedSinceViewed = new Map(); // sessionId → Map<path, { at, kind }>
 const sessionTimelineStore = createTimelineStore();
@@ -393,6 +398,13 @@ function seedInboxArrivalTimes(sessions) {
     const timestamp = fallback ? new Date(fallback).getTime() : 0;
     inboxArrivalTime.set(sessionId, Number.isFinite(timestamp) ? timestamp : 0);
   }
+}
+
+function captureInboxActivityTime(sessionId) {
+  const session = sessionMap.get(sessionId);
+  const fallback = lastActivityTime.get(sessionId) || session?.modified || session?.created;
+  const timestamp = fallback ? new Date(fallback).getTime() : 0;
+  inboxArrivalTime.set(sessionId, Number.isFinite(timestamp) ? timestamp : 0);
 }
 
 // Open/focus a single attention inbox item. Shared so the sidebar "Focus next"
@@ -636,7 +648,7 @@ function recordTimelineEvent(sessionId, kind, label, detail) {
 
 // Central activity dispatcher
 function setActivity(sessionId, active) {
-  if (responseReadySessions.has(sessionId)) {
+  if (active && responseReadySessions.has(sessionId)) {
     return;
   }
 
@@ -647,7 +659,7 @@ function setActivity(sessionId, active) {
     // Activity ended → response-ready if user isn't looking at this session
     if (sessionId !== activeSessionId) {
       responseReadySessions.add(sessionId);
-      inboxArrivalTime.set(sessionId, Date.now());
+      captureInboxActivityTime(sessionId);
       recordTimelineEvent(sessionId, 'response-ready', 'Ready for review', 'Agent stopped producing output while this session was not focused.');
       const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
       if (item) {
@@ -690,31 +702,86 @@ function updateAttentionInboxTask(sessionId, task) {
   return true;
 }
 
-function updateAgentTask(sessionId, task) {
+function setAgentTaskMessage(sessionId, task) {
   const current = agentTaskBySession.get(sessionId) || '';
   const next = task || '';
-  if (current !== next) {
-    if (next) agentTaskBySession.set(sessionId, next);
-    else agentTaskBySession.delete(sessionId);
-    if (!updateAttentionInboxTask(sessionId, next)) {
-      scheduleSessionStatusViewsRefresh();
-    }
+  if (current === next) return;
+  if (next) agentTaskBySession.set(sessionId, next);
+  else agentTaskBySession.delete(sessionId);
+  if (!updateAttentionInboxTask(sessionId, next)) {
+    scheduleSessionStatusViewsRefresh();
+  } else {
+    publishSessionOverview();
   }
+}
 
+function scheduleAgentTaskClear(sessionId) {
+  const existingTimer = agentTaskClearTimers.get(sessionId);
+  if (existingTimer) clearTimeout(existingTimer);
+  agentTaskClearTimers.delete(sessionId);
+  if (!agentTaskBySession.has(sessionId)) return;
+  agentTaskClearTimers.set(sessionId, setTimeout(() => {
+    agentTaskClearTimers.delete(sessionId);
+    setAgentTaskMessage(sessionId, '');
+  }, AGENT_TASK_CLEAR_DELAY_MS));
+}
+
+function clearAuthoritativeBusyTimer(sessionId) {
+  const timer = authoritativeBusyTimers.get(sessionId);
+  if (timer) clearTimeout(timer);
+  authoritativeBusyTimers.delete(sessionId);
+}
+
+function beginAgentTurn(sessionId) {
+  const wasCompleted = completedSessions.delete(sessionId);
+  completedTaskBySession.delete(sessionId);
+  clearAuthoritativeBusyTimer(sessionId);
+  authoritativeBusyState.set(sessionId, false);
+  const unreadChanged = responseReadySessions.delete(sessionId);
+  const attentionChanged = attentionSessions.delete(sessionId);
+  attentionReason.delete(sessionId);
+  if (unreadChanged || attentionChanged) inboxArrivalTime.delete(sessionId);
+  if (wasCompleted || unreadChanged || attentionChanged) scheduleSessionStatusViewsRefresh();
+}
+
+function forceAgentIdle(sessionId) {
+  completedSessions.add(sessionId);
+  completedTaskBySession.set(sessionId, agentTaskBySession.get(sessionId) || '');
+  clearAuthoritativeBusyTimer(sessionId);
+  authoritativeBusyState.set(sessionId, false);
+  const taskTimer = agentTaskTimers.get(sessionId);
+  if (taskTimer) clearTimeout(taskTimer);
+  agentTaskTimers.delete(sessionId);
+  scheduleAgentTaskClear(sessionId);
+  setActivity(sessionId, false);
+}
+
+function updateAgentTask(sessionId, task) {
+  const next = task || '';
+  if (next && completedSessions.has(sessionId)) {
+    const completedTask = completedTaskBySession.get(sessionId) || '';
+    if (!shouldResumeCompletedSession(completedTask, next)) return;
+    beginAgentTurn(sessionId);
+  }
+  const existingClearTimer = agentTaskClearTimers.get(sessionId);
+  if (existingClearTimer) clearTimeout(existingClearTimer);
+  agentTaskClearTimers.delete(sessionId);
   const existingTimer = agentTaskTimers.get(sessionId);
   if (existingTimer) clearTimeout(existingTimer);
   if (!next) {
     agentTaskTimers.delete(sessionId);
+    scheduleAgentTaskClear(sessionId);
     return;
   }
 
+  setAgentTaskMessage(sessionId, next);
   setActivity(sessionId, true);
   agentTaskTimers.set(sessionId, setTimeout(() => {
     agentTaskTimers.delete(sessionId);
     if (!shouldEndTaskFallbackActivity(authoritativeBusyState.get(sessionId))) return;
-    updateAgentTask(sessionId, '');
+    scheduleAgentTaskClear(sessionId);
     setActivity(sessionId, false);
-  }, 2000));
+  }, AGENT_TASK_ACTIVITY_TIMEOUT_MS));
 }
 
 // Single funnel for both attention sources (OSC-9 heuristic + Claude Code hooks).
@@ -731,7 +798,7 @@ function applyAttention(sessionId, signal) {
     const wasAttention = attentionSessions.has(sessionId);
     const prevAttention = new Set(attentionSessions);
     attentionSessions.add(sessionId);
-    if (!wasAttention) inboxArrivalTime.set(sessionId, Date.now());
+    if (!wasAttention) captureInboxActivityTime(sessionId);
     recordTimelineEvent(sessionId, 'needs-attention', 'Needs human attention', winner.reason);
     const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
     if (item) item.classList.add('needs-attention');
@@ -740,8 +807,9 @@ function applyAttention(sessionId, signal) {
       maybePlayAttentionSound(prevAttention, attentionSessions);
     }
   } else if (kind === 'ready' || kind === 'idle') {
-    // Agent finished / went idle → response-ready when unfocused (handled by setActivity).
-    setActivity(sessionId, false);
+    // Completion signals outrank stale title/progress heartbeats until the next
+    // prompt is submitted.
+    forceAgentIdle(sessionId);
   } else if (kind === 'busy') {
     setActivity(sessionId, true);
   }
@@ -1251,19 +1319,15 @@ window.api.onAttentionSignal((signal) => {
 
 // --- CLI busy state (OSC 0 title spinner detection) ---
 window.api.onCliBusyState((sessionId, busy) => {
-  const existingTimer = authoritativeBusyTimers.get(sessionId);
-  if (existingTimer) clearTimeout(existingTimer);
-  authoritativeBusyTimers.delete(sessionId);
+  clearAuthoritativeBusyTimer(sessionId);
+  if (busy && completedSessions.has(sessionId)) return;
   authoritativeBusyState.set(sessionId, busy);
   if (busy) {
     authoritativeBusyTimers.set(sessionId, setTimeout(() => {
-      authoritativeBusyTimers.delete(sessionId);
-      authoritativeBusyState.set(sessionId, false);
-      updateAgentTask(sessionId, '');
-      setActivity(sessionId, false);
+      forceAgentIdle(sessionId);
     }, AUTHORITATIVE_BUSY_TIMEOUT_MS));
   } else {
-    updateAgentTask(sessionId, '');
+    forceAgentIdle(sessionId);
   }
   setActivity(sessionId, busy);
 });
@@ -1709,6 +1773,8 @@ function updateRunningIndicators() {
       inboxArrivalTime.delete(id);
       sessionBusyState.delete(id);
       agentTaskBySession.delete(id);
+      completedSessions.delete(id);
+      completedTaskBySession.delete(id);
       authoritativeBusyState.delete(id);
       const authoritativeTimer = authoritativeBusyTimers.get(id);
       if (authoritativeTimer) clearTimeout(authoritativeTimer);
@@ -1716,6 +1782,9 @@ function updateRunningIndicators() {
       const taskTimer = agentTaskTimers.get(id);
       if (taskTimer) clearTimeout(taskTimer);
       agentTaskTimers.delete(id);
+      const taskClearTimer = agentTaskClearTimers.get(id);
+      if (taskClearTimer) clearTimeout(taskClearTimer);
+      agentTaskClearTimers.delete(id);
     }
     const dot = item.querySelector('.session-status-dot');
     if (dot) dot.classList.toggle('running', running);
@@ -1955,6 +2024,7 @@ function seedSessionWhenReady(sessionId, seedText) {
     if (settled || timedOut) {
       seeded = true;
       // Bracketed paste keeps the multi-line markdown packet intact, then submit.
+      beginAgentTurn(sessionId);
       window.api.sendInput(sessionId, `\x1b[200~${seedText}\x1b[201~\r`);
       recordTimelineEvent(sessionId, 'started', 'Handoff seeded', 'Seeded fresh session with the handoff packet.');
       return;
