@@ -1753,8 +1753,11 @@ ipcMain.handle('open-terminal', async (event, sessionId, projectPath, isNew, ses
               mainWindow.webContents.send('cli-busy-state', currentId, true);
             }
           } else if (busySignal === false && codeWasBusy) {
-            busyTitleCodes.delete(code);
-            if (busyTitleCodes.size === 0 && wasBusy) {
+            // A non-spinner replacement on any title channel is a definitive
+            // idle edge. Some CLI versions set multiple OSC title codes while
+            // busy but only restore one of them when the turn ends.
+            busyTitleCodes.clear();
+            if (wasBusy) {
               session._cliBusy = false;
               session._oscIdle = true;
               session._lastBusyHeartbeatAt = 0;

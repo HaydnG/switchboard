@@ -489,6 +489,9 @@ function createTerminalEntry(session) {
   // Wire up IPC (use entry.session.sessionId so fork re-keying works)
   terminal.onData((data) => {
     if (data === '\x1b[I' || data === '\x1b[O') return;
+    if (data.includes('\r') && typeof beginAgentTurn === 'function') {
+      beginAgentTurn(entry.session.sessionId);
+    }
     window.api.sendInput(entry.session.sessionId, data);
   });
   setupTerminalKeyBindings(terminal, container, () => entry.session.sessionId, {
