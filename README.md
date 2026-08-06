@@ -13,11 +13,15 @@ Switchboard is a desktop app that gives you a unified view of all your Claude Co
 - **Attention Inbox** — A prioritized queue of every session that needs you, with a "Focus next" jump and a keyboard shortcut
 - **Quick Actions** — Approve, deny, or reply to a waiting agent straight from the attention inbox or a grid card, without focusing its terminal
 - **Command Palette** — `Cmd/Ctrl+K` fuzzy-jump to any session, project, or app action
+- **Unified Discovery** — Search transcripts, plans, and agent files together with highlighted context, smart filters, saved searches, and deep actions
 - **Git-Aware Cards** — Each live session's card shows its branch and dirty state (+/− lines, changed files) at a glance
 - **Prompt Queue** — Compose instructions for a busy agent; they deliver automatically, one per turn, when it goes idle
 - **Native Notifications** — OS notifications, dock/taskbar badge, and a tray icon when an agent needs you — even when Switchboard is in the background
 - **Session Health & Handoff** — Flags long/expensive sessions and turns "Handoff Recommended" into a one-click fresh-start with a context packet
+- **Context Transfer** — Review a bounded local packet, then seed a clean session or send it to another active agent
+- **Local Notes & Tags** — Attach private metadata without writing it into agent transcripts
 - **Session Groups** — User-defined colored folders for organising agents, with a flexible resize/drag grid layout
+- **Schedule Supervision** — See next runs, recent outcomes, failures, and manual-run status for scheduled tasks
 - **Usage Monitoring** — Live Claude usage limits (5h / weekly / Opus / Sonnet / quota) with a durable cache
 - **Fork & Resume** — Branch off from any point in a session's history
 - **Full-Text Search** — Find any session by what was discussed, not just when it happened
@@ -25,6 +29,7 @@ Switchboard is a desktop app that gives you a unified view of all your Claude Co
 - **Plans & Memory** — Browse and edit your plan files and CLAUDE.md memory in one place
 - **Activity Stats** — Heatmap of your coding activity across all projects
 - **Session Names** — Picks up session names from Claude Code's `/rename` command automatically
+- **Power-User Guidance** — Built-in shortcuts, first-run guidance, sidebar multi-select, and privacy-safe diagnostics export
 
 ## Session Grid Overview
 
@@ -112,7 +117,7 @@ Switchboard treats your sessions like an agent control room — surfacing not ju
 
 Grab the latest release for your platform:
 
-**[Download Switchboard](https://github.com/doctly/switchboard/releases/latest)**
+**[Download Switchboard](https://github.com/HaydnG/switchboard/releases/latest)**
 
 - **macOS**: `.dmg` (Apple Silicon & Intel)
 - **Windows**: `.exe` installer
@@ -151,6 +156,12 @@ npm install
 
 # Start the app
 npm start
+
+# Full local quality gate
+npm run check
+
+# Isolated Electron startup smoke test
+npm run smoke
 ```
 
 `npm start` bundles CodeMirror and launches Electron. For faster iteration after the first run:
@@ -237,7 +248,8 @@ The macOS build uses custom entitlements (`build/entitlements.mac.plist`) to all
 main.js            Electron main process
 preload.js         Context bridge (IPC bindings)
 db.js              SQLite session cache & metadata
-public/            Renderer (HTML/CSS/JS), incl. pure supervision modules
+public/            Legacy renderer and pure supervision/productivity modules
+src/renderer/       React/TypeScript shell, design system, typed API and stores
 test/              Unit tests (node --test) for the pure modules
 docs/              Feature specs & roadmap (see docs/fork-features.md)
 scripts/           Build & postinstall scripts

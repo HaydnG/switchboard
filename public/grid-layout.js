@@ -10,8 +10,21 @@
   // Snap-to-grid spans are deliberately bounded (spec 08): a card may span up to
   // the available column count and up to MAX_GRID_ROWS rows.
   const MAX_GRID_ROWS = 3;
+  // Chromium becomes increasingly fragile when every terminal owns a WebGL
+  // context. Keep GPU renderers to the focused/visible working set; xterm's
+  // buffer and PTY remain alive for every other terminal.
+  const MAX_ACTIVE_WEBGL_RENDERERS = 4;
+  // Offscreen output may wait briefly so bursts coalesce into fewer xterm writes.
+  // The byte cap bounds memory/latency for sustained output.
+  const HIDDEN_TERMINAL_FLUSH_MS = 50;
+  const HIDDEN_TERMINAL_BUFFER_CHARS = 64 * 1024;
 
-  function calculateGridColumnCount({ width, cardCount, minCardWidth = MIN_GRID_CARD_WIDTH, gap = GRID_GAP } = {}) {
+  function calculateGridColumnCount({
+    width,
+    cardCount,
+    minCardWidth = MIN_GRID_CARD_WIDTH,
+    gap = GRID_GAP,
+  } = {}) {
     const safeWidth = Number(width) || 0;
     const safeCardCount = Math.max(1, Number(cardCount) || 1);
     const safeMinWidth = Math.max(1, Number(minCardWidth) || MIN_GRID_CARD_WIDTH);
@@ -49,13 +62,25 @@
       const span = normalizeSpan({ cols: entry.colSpan, rows: entry.rowSpan }, maxCols);
       return { sessionId, order, index, colSpan: span.cols, rowSpan: span.rows };
     });
-    decorated.sort((a, b) => (a.order - b.order) || (a.index - b.index));
+    decorated.sort((a, b) => a.order - b.order || a.index - b.index);
     return decorated.map((item, position) => ({
       sessionId: item.sessionId,
       order: position,
       colSpan: item.colSpan,
       rowSpan: item.rowSpan,
     }));
+  }
+
+  // Move a persisted layout entry when a runtime replaces Switchboard's
+  // temporary session ID with the ID written to its session file.
+  function rekeyLayoutEntry(layoutMap, oldId, newId) {
+    if (!layoutMap || typeof layoutMap !== 'object' || !oldId || !newId || oldId === newId) {
+      return false;
+    }
+    if (!Object.prototype.hasOwnProperty.call(layoutMap, oldId)) return false;
+    layoutMap[newId] = layoutMap[oldId];
+    delete layoutMap[oldId];
+    return true;
   }
 
   // Move `fromId` to sit immediately before `toId` in the ordered list. Returns a
@@ -73,13 +98,51 @@
     return ids;
   }
 
+  // Pick the bounded WebGL working set without depending on DOM state. Focused
+  // terminals win, then visible terminals, then the most recently visible.
+  function selectTerminalRendererIds(candidates, budget = MAX_ACTIVE_WEBGL_RENDERERS) {
+    const safeBudget = Math.max(0, Math.floor(Number(budget) || 0));
+    if (!Array.isArray(candidates) || safeBudget === 0) return [];
+    return candidates
+      .filter((candidate) => candidate && (candidate.focused || candidate.visible))
+      .map((candidate, index) => ({ ...candidate, index }))
+      .sort(
+        (a, b) =>
+          Number(Boolean(b.focused)) - Number(Boolean(a.focused)) ||
+          Number(Boolean(b.visible)) - Number(Boolean(a.visible)) ||
+          (Number(b.lastVisibleAt) || 0) - (Number(a.lastVisibleAt) || 0) ||
+          a.index - b.index,
+      )
+      .slice(0, safeBudget)
+      .map((candidate) => candidate.id);
+  }
+
+  // Return 0 for a frame-aligned flush or a timeout for safe offscreen
+  // coalescing. Large buffers always flush promptly to keep memory bounded.
+  function terminalFlushDelay({
+    visible = false,
+    focused = false,
+    pendingChars = 0,
+    hiddenDelayMs = HIDDEN_TERMINAL_FLUSH_MS,
+    maxBufferedChars = HIDDEN_TERMINAL_BUFFER_CHARS,
+  } = {}) {
+    if (visible || focused || Number(pendingChars) >= Number(maxBufferedChars)) return 0;
+    return Math.max(0, Number(hiddenDelayMs) || 0);
+  }
+
   return {
     MIN_GRID_CARD_WIDTH,
     GRID_GAP,
     MAX_GRID_ROWS,
+    MAX_ACTIVE_WEBGL_RENDERERS,
+    HIDDEN_TERMINAL_FLUSH_MS,
+    HIDDEN_TERMINAL_BUFFER_CHARS,
     calculateGridColumnCount,
     normalizeSpan,
     applyLayout,
+    rekeyLayoutEntry,
     reorder,
+    selectTerminalRendererIds,
+    terminalFlushDelay,
   };
 });

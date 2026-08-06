@@ -52,14 +52,14 @@ test('runningToStop only includes busy/running sessions in the active filter', (
   assert.deepEqual(bulkTargets(SESSIONS, runtime, 'attention').runningToStop, []);
 });
 
-test('queue ordering matches getAttentionInboxItems priority (attention before ready)', () => {
+test('queue ordering matches the actionable lane activity order', () => {
   const runtime = fullRuntime();
 
-  // busy/running are not part of the step-through queue; attention outranks ready.
-  assert.deepEqual(bulkTargets(SESSIONS, runtime, 'all').queue, ['attention', 'ready']);
+  // Busy/running are excluded; Ready and Needs You share the actionable lane.
+  assert.deepEqual(bulkTargets(SESSIONS, runtime, 'all').queue, ['ready', 'attention']);
 });
 
-test('queue orders multiple attention sessions by most recent activity', () => {
+test('queue orders actionable sessions by their frozen activity snapshot', () => {
   const sessions = [
     { sessionId: 'attn-old', modified: '2026-06-12T08:00:00.000Z' },
     { sessionId: 'attn-new', modified: '2026-06-12T10:00:00.000Z' },
@@ -68,9 +68,14 @@ test('queue orders multiple attention sessions by most recent activity', () => {
   const runtime = state({
     attentionSessions: new Set(['attn-old', 'attn-new']),
     responseReadySessions: new Set(['ready']),
+    inboxArrivalTime: new Map([
+      ['attn-old', Date.parse('2026-06-12T08:00:00.000Z')],
+      ['attn-new', Date.parse('2026-06-12T10:00:00.000Z')],
+      ['ready', Date.parse('2026-06-12T11:00:00.000Z')],
+    ]),
   });
 
-  assert.deepEqual(bulkTargets(sessions, runtime, 'all').queue, ['attn-new', 'attn-old', 'ready']);
+  assert.deepEqual(bulkTargets(sessions, runtime, 'all').queue, ['ready', 'attn-new', 'attn-old']);
 });
 
 test('all target sets are empty when the filter excludes everything', () => {

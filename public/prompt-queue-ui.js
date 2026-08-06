@@ -40,6 +40,7 @@ function deliverQueuedPrompts(sessionId, { justWentIdle = false } = {}) {
   const item = takeNextPrompt(promptQueueStore, sessionId);
   if (!item) return;
   savePromptQueues();
+  if (typeof beginAgentTurn === 'function') beginAgentTurn(sessionId);
   window.api.sendInput(sessionId, `\x1b[200~${item.text}\x1b[201~\r`);
   recordTimelineEvent(sessionId, 'queued-prompt', 'Queued prompt delivered', item.text.slice(0, 120));
   refreshSessionStatusViews();

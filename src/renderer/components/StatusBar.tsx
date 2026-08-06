@@ -16,11 +16,7 @@ export function StatusBar({ updaterStatus, pendingUpdate, onRestart }: StatusBar
       <span id="status-bar-updater">
         {updaterStatus}
         {pendingUpdate && (
-          <button
-            id="status-bar-update-restart-btn"
-            type="button"
-            onClick={onRestart}
-          >
+          <button id="status-bar-update-restart-btn" type="button" onClick={onRestart}>
             Restart
           </button>
         )}

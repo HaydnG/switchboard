@@ -231,6 +231,23 @@ let cachedPlans = [];
 let visibleSessionCount = 10;
 let sessionMaxAgeDays = 3;
 const pendingSessions = new Map(); // sessionId → { session, projectPath, folder }
+const recentlyExitedSessions = new Map(); // sessionId → timeout id
+const RECENT_EXIT_VISIBLE_MS = 3 * 60 * 1000;
+
+function clearRecentlyExitedSession(sessionId) {
+  const timeout = recentlyExitedSessions.get(sessionId);
+  if (timeout) clearTimeout(timeout);
+  recentlyExitedSessions.delete(sessionId);
+}
+
+function keepRecentlyExitedSessionVisible(sessionId) {
+  clearRecentlyExitedSession(sessionId);
+  const timeout = setTimeout(() => {
+    recentlyExitedSessions.delete(sessionId);
+    if (showRunningOnly) refreshSidebar();
+  }, RECENT_EXIT_VISIBLE_MS);
+  recentlyExitedSessions.set(sessionId, timeout);
+}
 
 // Bridge functions for settings-panel.js
 window._setVisibleSessionCount = (v) => { visibleSessionCount = v; };
@@ -283,8 +300,17 @@ const attentionReason = new Map(); // sessionId → { reason, source } — for h
 const responseReadySessions = new Set(); // Claude finished, user hasn't looked (terminal state)
 const sessionBusyState = new Map(); // sessionId → boolean (currently active)
 const agentTaskBySession = new Map(); // sessionId → current task shown by the agent UI
-const agentTaskTimers = new Map(); // sessionId → idle timeout
+const agentTaskTimers = new Map(); // sessionId → fallback activity timeout
+const agentTaskClearTimers = new Map(); // sessionId → delayed message clear
+const completedSessions = new Set(); // sessions locked idle until their next submitted turn
+const completedTaskBySession = new Map(); // sessionId → task visible when completion arrived
+const authoritativeBusyState = new Map(); // sessionId → OSC 0 busy signal
+const authoritativeBusyTimers = new Map(); // sessionId → missed-idle safety timeout
+const AUTHORITATIVE_BUSY_TIMEOUT_MS = 5000;
+const AGENT_TASK_ACTIVITY_TIMEOUT_MS = 5000;
+const AGENT_TASK_CLEAR_DELAY_MS = 8000;
 const lastActivityTime = new Map(); // sessionId → Date of last terminal output
+const inboxArrivalTime = new Map(); // sessionId → frozen last-activity timestamp for inbox order
 const lastViewedTime = new Map(); // sessionId → Date the session last became focused
 const filesTouchedSinceViewed = new Map(); // sessionId → Map<path, { at, kind }>
 const sessionTimelineStore = createTimelineStore();
@@ -348,8 +374,37 @@ function statusRuntime() {
     sessionBusyState,
     openSessions,
     lastActivityTime,
+    inboxArrivalTime,
     activeSessionId,
   };
+}
+
+// Sessions can already be waiting when Switchboard starts, before this process
+// receives the signal that put them in the inbox. Seed their arrival time once
+// from stable session metadata so subsequent terminal output cannot reshuffle
+// the Attention list.
+function seedInboxArrivalTimes(sessions) {
+  const runtime = statusRuntime();
+  for (const session of sessions) {
+    const sessionId = session?.sessionId;
+    if (!sessionId) continue;
+    const status = getSessionStatus(session, runtime);
+    if (!status.inInbox) {
+      inboxArrivalTime.delete(sessionId);
+      continue;
+    }
+    if (inboxArrivalTime.has(sessionId)) continue;
+    const fallback = lastActivityTime.get(sessionId) || session.modified || session.created;
+    const timestamp = fallback ? new Date(fallback).getTime() : 0;
+    inboxArrivalTime.set(sessionId, Number.isFinite(timestamp) ? timestamp : 0);
+  }
+}
+
+function captureInboxActivityTime(sessionId) {
+  const session = sessionMap.get(sessionId);
+  const fallback = lastActivityTime.get(sessionId) || session?.modified || session?.created;
+  const timestamp = fallback ? new Date(fallback).getTime() : 0;
+  inboxArrivalTime.set(sessionId, Number.isFinite(timestamp) ? timestamp : 0);
 }
 
 // Open/focus a single attention inbox item. Shared so the sidebar "Focus next"
@@ -361,9 +416,191 @@ function focusAttentionItem(item) {
 // Focus the next session needing attention (wrap-around handled by the helper).
 function focusNextAttention() {
   if (typeof getNextAttentionInboxItem !== 'function') return;
-  const next = getNextAttentionInboxItem(getAllKnownSessionsForStatus(), statusRuntime(), activeSessionId);
+  const sessions = getAllKnownSessionsForStatus();
+  seedInboxArrivalTimes(sessions);
+  const next = getNextAttentionInboxItem(sessions, statusRuntime(), activeSessionId);
   focusAttentionItem(next);
 }
+
+async function toggleSessionArchiveFromReact(session) {
+  const archived = session.archived ? 0 : 1;
+  if (archived && activePtyIds.has(session.sessionId)) {
+    const confirmed = await showControlDialog({
+      title: 'Archive Running Session',
+      message: 'Archiving this running session will stop its process first.',
+      confirmLabel: 'Stop And Archive',
+      tone: 'danger',
+      details: {
+        Session:
+          cleanDisplayName(session.name || session.aiTitle || session.summary) ||
+          session.sessionId,
+      },
+    });
+    if (!confirmed) return;
+    await window.api.stopSession(session.sessionId);
+  }
+  await window.api.archiveSession(session.sessionId, archived);
+  session.archived = archived;
+  await loadProjects();
+  showControlToast({
+    message: archived ? 'Session archived.' : 'Session restored.',
+    ...(archived
+      ? {
+          actionLabel: 'Undo',
+          onAction: async () => {
+            await window.api.archiveSession(session.sessionId, 0);
+            session.archived = 0;
+            loadProjects();
+          },
+        }
+      : {}),
+  });
+}
+
+window.addEventListener('switchboard:react-command', event => {
+  const action = event?.detail?.action;
+  if (action === 'focus-search') {
+    searchInput?.focus();
+  } else if (action === 'open-command-palette') {
+    openCommandPalette();
+  } else if (action === 'toggle-grid') {
+    toggleGridView();
+  } else if (action === 'focus-next-attention') {
+    focusNextAttention();
+  } else if (action === 'open-settings') {
+    openSettingsViewer('global');
+  } else if (action === 'add-project') {
+    showAddProjectDialog();
+  } else if (action === 'open-session') {
+    const session = sessionMap.get(event.detail.sessionId);
+    if (session) openSession(session);
+  } else if (action === 'session-action') {
+    const session = sessionMap.get(event.detail.sessionId);
+    if (!session) return;
+    if (event.detail.command === 'timeline') showTimelineViewer(session);
+    else if (event.detail.command === 'messages') showJsonlViewer(session);
+    else if (event.detail.command === 'handoff') showHandoffPrompt(session);
+    else if (event.detail.command === 'transfer') showContextTransferDialog(session);
+    else if (event.detail.command === 'stop') confirmAndStopSession(session.sessionId);
+    else if (event.detail.command === 'copy-id') {
+      window.api.writeClipboard(session.sessionId);
+      showControlToast({ message: 'Session ID copied.' });
+    } else if (event.detail.command === 'pin') {
+      window.api.toggleStar(session.sessionId).then(({ starred }) => {
+        session.starred = starred;
+        refreshSidebar({ resort: true });
+      });
+    } else if (event.detail.command === 'archive') {
+      toggleSessionArchiveFromReact(session);
+    } else if (event.detail.command === 'fork') {
+      const project = findProjectForSession(session);
+      if (project) forkSession(session, project);
+    } else if (event.detail.command === 'resume-config') {
+      showResumeSessionDialog(session);
+    } else if (event.detail.command === 'annotate') {
+      showSessionAnnotationsDialog(session);
+    } else if (
+      event.detail.command === 'queue' &&
+      typeof openPaletteQueueDialog === 'function'
+    ) {
+      openPaletteQueueDialog(session);
+    }
+  } else if (action === 'quick-action') {
+    const sessionId = event.detail.sessionId;
+    const session = sessionMap.get(sessionId);
+    if (session && typeof getQuickActionsForSession === 'function') {
+      const actions = getQuickActionsForSession({
+        status: quickActionsStatusKey(sessionId),
+        hasLivePty: activePtyIds.has(sessionId),
+        runtime: session.runtime || 'claude',
+      });
+      const quickAction = actions.find(candidate => candidate.id === event.detail.actionId);
+      if (quickAction) {
+        performQuickAction(sessionId, quickAction, event.detail.anchor || document.body);
+      }
+    }
+  } else if (action === 'assign-group') {
+    if (typeof assignSessionToGroup === 'function') {
+      assignSessionToGroup(event.detail.sessionId, event.detail.groupId || null);
+    }
+  } else if (action === 'rename-session') {
+    const session = sessionMap.get(event.detail.sessionId);
+    if (session && typeof event.detail.name === 'string') {
+      const name = event.detail.name.trim() || null;
+      window.api.renameSession(session.sessionId, name).then(() => {
+        session.name = name;
+        loadProjects();
+      });
+    }
+  } else if (action === 'create-group') {
+    if (
+      typeof showGroupEditorDialog === 'function' &&
+      typeof createGroupForSession === 'function'
+    ) {
+      showGroupEditorDialog({ title: 'New Folder' }).then(result => {
+        if (result) createGroupForSession(event.detail.sessionId, result);
+      });
+    }
+  } else if (action === 'launch-group') {
+    if (typeof launchAllInGroup === 'function') launchAllInGroup(event.detail.groupId);
+  } else if (action === 'edit-group') {
+    const group = groupsState.groups.find(candidate => candidate.id === event.detail.groupId);
+    if (group && typeof showGroupEditorDialog === 'function') {
+      showGroupEditorDialog({
+        title: 'Edit Folder',
+        name: group.name,
+        color: group.color,
+      }).then(result => {
+        if (!result) return;
+        if (result.name !== group.name) renameUserGroup(group.id, result.name);
+        if (result.color !== group.color) recolorUserGroup(group.id, result.color);
+      });
+    }
+  } else if (action === 'delete-group') {
+    const group = groupsState.groups.find(candidate => candidate.id === event.detail.groupId);
+    if (group) {
+      showControlDialog({
+        title: 'Delete Folder',
+        message: 'Sessions return to Ungrouped. Session files are not deleted.',
+        confirmLabel: 'Delete Folder',
+        tone: 'warning',
+        details: { Folder: group.name },
+      }).then(confirmed => {
+        if (confirmed) removeUserGroup(group.id);
+      });
+    }
+  } else if (action === 'new-session') {
+    const project = [...cachedProjects, ...cachedAllProjects].find(
+      candidate => candidate.projectPath === event.detail.projectPath,
+    );
+    if (project) {
+      if (event.detail.runtime === 'pi') showNewPiSessionDialog(project, null);
+      else if (event.detail.runtime === 'omp') showNewOmpSessionDialog(project, null);
+      else if (event.detail.runtime === 'terminal') launchTerminalSession(project, null);
+      else showNewSessionDialog(project, null);
+    }
+  } else if (action === 'open-view') {
+    document.querySelector(`.sidebar-tab[data-tab="${event.detail.view}"]`)?.click();
+  } else if (action === 'show-dashboard') {
+    hideAllViewers();
+    terminalArea.style.display = 'none';
+    placeholder.style.display = 'flex';
+  }
+  requestAnimationFrame(() => publishSessionOverview());
+});
+
+window.addEventListener('keydown', event => {
+  const target = event.target;
+  const editable =
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target?.isContentEditable;
+  if (editable) return;
+  if (event.key === '?' || ((event.metaKey || event.ctrlKey) && event.key === '/')) {
+    event.preventDefault();
+    showShortcutReference();
+  }
+});
 
 // --- Attention alert sound (synthesized, no bundled binary) ---
 let _attentionAudioCtx = null;
@@ -411,7 +648,7 @@ function recordTimelineEvent(sessionId, kind, label, detail) {
 
 // Central activity dispatcher
 function setActivity(sessionId, active) {
-  if (responseReadySessions.has(sessionId)) {
+  if (active && responseReadySessions.has(sessionId)) {
     return;
   }
 
@@ -422,6 +659,7 @@ function setActivity(sessionId, active) {
     // Activity ended → response-ready if user isn't looking at this session
     if (sessionId !== activeSessionId) {
       responseReadySessions.add(sessionId);
+      captureInboxActivityTime(sessionId);
       recordTimelineEvent(sessionId, 'response-ready', 'Ready for review', 'Agent stopped producing output while this session was not focused.');
       const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
       if (item) {
@@ -450,28 +688,100 @@ function setActivity(sessionId, active) {
 // OMP redraws its spinner/status line continuously while working. Treat the
 // latest matching redraw as a liveness signal so it can share Claude's Working
 // / Open status model without requiring an OSC title.
-function updateAgentTask(sessionId, task) {
+function updateAttentionInboxTask(sessionId, task) {
+  const row = document.querySelector(`.attention-inbox-item[data-session-id="${sessionId}"]`);
+  if (!row) return false;
+  const taskEl = row.querySelector('.attention-inbox-task');
+  if (!taskEl) {
+    return !row.classList.contains('status-busy') && !row.classList.contains('status-running');
+  }
+  const next = task || '';
+  taskEl.textContent = next || '\u00a0';
+  taskEl.title = next;
+  taskEl.classList.toggle('is-empty', !next);
+  return true;
+}
+
+function setAgentTaskMessage(sessionId, task) {
   const current = agentTaskBySession.get(sessionId) || '';
   const next = task || '';
-  if (current !== next) {
-    if (next) agentTaskBySession.set(sessionId, next);
-    else agentTaskBySession.delete(sessionId);
+  if (current === next) return;
+  if (next) agentTaskBySession.set(sessionId, next);
+  else agentTaskBySession.delete(sessionId);
+  if (!updateAttentionInboxTask(sessionId, next)) {
     scheduleSessionStatusViewsRefresh();
+  } else {
+    publishSessionOverview();
   }
+}
 
+function scheduleAgentTaskClear(sessionId) {
+  const existingTimer = agentTaskClearTimers.get(sessionId);
+  if (existingTimer) clearTimeout(existingTimer);
+  agentTaskClearTimers.delete(sessionId);
+  if (!agentTaskBySession.has(sessionId)) return;
+  agentTaskClearTimers.set(sessionId, setTimeout(() => {
+    agentTaskClearTimers.delete(sessionId);
+    setAgentTaskMessage(sessionId, '');
+  }, AGENT_TASK_CLEAR_DELAY_MS));
+}
+
+function clearAuthoritativeBusyTimer(sessionId) {
+  const timer = authoritativeBusyTimers.get(sessionId);
+  if (timer) clearTimeout(timer);
+  authoritativeBusyTimers.delete(sessionId);
+}
+
+function beginAgentTurn(sessionId) {
+  const wasCompleted = completedSessions.delete(sessionId);
+  completedTaskBySession.delete(sessionId);
+  clearAuthoritativeBusyTimer(sessionId);
+  authoritativeBusyState.set(sessionId, false);
+  const unreadChanged = responseReadySessions.delete(sessionId);
+  const attentionChanged = attentionSessions.delete(sessionId);
+  attentionReason.delete(sessionId);
+  if (unreadChanged || attentionChanged) inboxArrivalTime.delete(sessionId);
+  if (wasCompleted || unreadChanged || attentionChanged) scheduleSessionStatusViewsRefresh();
+}
+
+function forceAgentIdle(sessionId) {
+  completedSessions.add(sessionId);
+  completedTaskBySession.set(sessionId, agentTaskBySession.get(sessionId) || '');
+  clearAuthoritativeBusyTimer(sessionId);
+  authoritativeBusyState.set(sessionId, false);
+  const taskTimer = agentTaskTimers.get(sessionId);
+  if (taskTimer) clearTimeout(taskTimer);
+  agentTaskTimers.delete(sessionId);
+  scheduleAgentTaskClear(sessionId);
+  setActivity(sessionId, false);
+}
+
+function updateAgentTask(sessionId, task) {
+  const next = task || '';
+  if (next && completedSessions.has(sessionId)) {
+    const completedTask = completedTaskBySession.get(sessionId) || '';
+    if (!shouldResumeCompletedSession(completedTask, next)) return;
+    beginAgentTurn(sessionId);
+  }
+  const existingClearTimer = agentTaskClearTimers.get(sessionId);
+  if (existingClearTimer) clearTimeout(existingClearTimer);
+  agentTaskClearTimers.delete(sessionId);
   const existingTimer = agentTaskTimers.get(sessionId);
   if (existingTimer) clearTimeout(existingTimer);
   if (!next) {
     agentTaskTimers.delete(sessionId);
+    scheduleAgentTaskClear(sessionId);
     return;
   }
 
+  setAgentTaskMessage(sessionId, next);
   setActivity(sessionId, true);
   agentTaskTimers.set(sessionId, setTimeout(() => {
     agentTaskTimers.delete(sessionId);
-    updateAgentTask(sessionId, '');
+    if (!shouldEndTaskFallbackActivity(authoritativeBusyState.get(sessionId))) return;
+    scheduleAgentTaskClear(sessionId);
     setActivity(sessionId, false);
-  }, 2000));
+  }, AGENT_TASK_ACTIVITY_TIMEOUT_MS));
 }
 
 // Single funnel for both attention sources (OSC-9 heuristic + Claude Code hooks).
@@ -488,6 +798,7 @@ function applyAttention(sessionId, signal) {
     const wasAttention = attentionSessions.has(sessionId);
     const prevAttention = new Set(attentionSessions);
     attentionSessions.add(sessionId);
+    if (!wasAttention) captureInboxActivityTime(sessionId);
     recordTimelineEvent(sessionId, 'needs-attention', 'Needs human attention', winner.reason);
     const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
     if (item) item.classList.add('needs-attention');
@@ -496,8 +807,9 @@ function applyAttention(sessionId, signal) {
       maybePlayAttentionSound(prevAttention, attentionSessions);
     }
   } else if (kind === 'ready' || kind === 'idle') {
-    // Agent finished / went idle → response-ready when unfocused (handled by setActivity).
-    setActivity(sessionId, false);
+    // Completion signals outrank stale title/progress heartbeats until the next
+    // prompt is submitted.
+    forceAgentIdle(sessionId);
   } else if (kind === 'busy') {
     setActivity(sessionId, true);
   }
@@ -513,6 +825,7 @@ function trackActivity(sessionId, data) {
 
 function clearUnread(sessionId) {
   const changed = responseReadySessions.delete(sessionId);
+  if (changed && !attentionSessions.has(sessionId)) inboxArrivalTime.delete(sessionId);
   const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
   if (item) {
     item.classList.remove('response-ready');
@@ -527,6 +840,7 @@ function clearNotifications(sessionId) {
   handleSessionViewed(sessionId);
   clearUnread(sessionId);
   const changed = attentionSessions.delete(sessionId);
+  if (changed && !responseReadySessions.has(sessionId)) inboxArrivalTime.delete(sessionId);
   attentionReason.delete(sessionId);
   const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
   if (item) item.classList.remove('needs-attention');
@@ -856,6 +1170,7 @@ window.api.onSessionDetected((tempId, realId) => {
   sessionMap.delete(tempId);
   sessionMap.set(realId, entry.session);
   rekeySessionGroupAssignment(tempId, realId);
+  if (typeof rekeyGridSessionState === 'function') rekeyGridSessionState(tempId, realId);
 
   terminalHeaderId.textContent = realId;
   terminalHeaderName.textContent = 'New session';
@@ -901,6 +1216,7 @@ window.api.onSessionForked((oldId, newId) => {
   sessionMap.delete(oldId);
   sessionMap.set(newId, entry.session);
   rekeySessionGroupAssignment(oldId, newId);
+  if (typeof rekeyGridSessionState === 'function') rekeyGridSessionState(oldId, newId);
 
   terminalHeaderId.textContent = newId;
   applyRuntimeLabel(terminalHeaderRuntime, entry.session.runtime);
@@ -922,6 +1238,7 @@ window.api.onProcessExited((sessionId, exitCode) => {
   const session = sessionMap.get(sessionId);
   if (entry) {
     entry.closed = true;
+    keepRecentlyExitedSessionVisible(sessionId);
     recordTimelineEvent(sessionId, 'exited', 'Process exited', `Exit code ${exitCode}.`);
     // Write a visible exit banner so the user can see when the process ended
     // and read any error output it printed (claude / devbox / shell stderr).
@@ -971,6 +1288,7 @@ window.api.onProcessExited((sessionId, exitCode) => {
     gridViewerCount.textContent = gridCards.size + ' session' + (gridCards.size !== 1 ? 's' : '');
   }
 
+  if (showRunningOnly) refreshSidebar();
   pollActiveSessions();
 });
 
@@ -1001,17 +1319,128 @@ window.api.onAttentionSignal((signal) => {
 
 // --- CLI busy state (OSC 0 title spinner detection) ---
 window.api.onCliBusyState((sessionId, busy) => {
+  clearAuthoritativeBusyTimer(sessionId);
+  if (busy && completedSessions.has(sessionId)) return;
+  authoritativeBusyState.set(sessionId, busy);
+  if (busy) {
+    authoritativeBusyTimers.set(sessionId, setTimeout(() => {
+      forceAgentIdle(sessionId);
+    }, AUTHORITATIVE_BUSY_TIMEOUT_MS));
+  } else {
+    forceAgentIdle(sessionId);
+  }
   setActivity(sessionId, busy);
 });
 
 // --- Single entry point for all sidebar renders ---
 // resort=true: re-sort items by priority+time (use for user-initiated actions)
 // resort=false (default): preserve existing DOM order, new items go to top
+function getWorkspaceView() {
+  if (gridViewActive) return 'grid';
+  const viewers = [
+    ['timeline-viewer', 'timeline'],
+    ['jsonl-viewer', 'messages'],
+    ['settings-viewer', 'settings'],
+    ['plan-viewer', 'plan'],
+    ['memory-viewer', 'memory'],
+    ['stats-viewer', 'stats'],
+  ];
+  for (const [id, view] of viewers) {
+    const element = document.getElementById(id);
+    if (element && getComputedStyle(element).display !== 'none') return view;
+  }
+  if (getComputedStyle(placeholder).display !== 'none') return 'dashboard';
+  return 'terminal';
+}
+
+function publishSessionOverview() {
+  const sessions = getAllKnownSessionsForStatus();
+  const runtime = statusRuntime();
+  window.dispatchEvent(
+    new CustomEvent('switchboard:session-overview', {
+      detail: {
+        total: sessions.length,
+        running: activePtyIds.size,
+        attention: attentionSessions.size,
+        ready: responseReadySessions.size,
+        activeSessionId,
+        gridViewActive,
+        workspaceView: getWorkspaceView(),
+        groups: (groupsState?.groups || []).map(group => ({
+          id: group.id,
+          name: group.name,
+          color: group.color,
+          order: group.order ?? Number.MAX_SAFE_INTEGER,
+          sessionCount: Object.values(groupsState.assignments || {}).filter(
+            groupId => groupId === group.id,
+          ).length,
+        })),
+        sessions: sessions.map(session => {
+          const status = getSessionStatus(session, runtime);
+          const health = getSessionHealth(session);
+          const gitSummary =
+            typeof getGitSummaryForSession === 'function'
+              ? getGitSummaryForSession(session.sessionId)
+              : null;
+          const fileSummary =
+            typeof getSessionFilePanelSummary === 'function'
+              ? getSessionFilePanelSummary(session.sessionId)
+              : null;
+          const group =
+            typeof getGroupForSession === 'function'
+              ? getGroupForSession(groupsState, session.sessionId)
+              : null;
+          return {
+            id: session.sessionId,
+            name:
+              cleanDisplayName(session.name || session.aiTitle || session.summary) ||
+              session.sessionId,
+            projectPath: session.projectPath || '',
+            runtime: session.runtime || 'claude',
+            type: session.type || 'agent',
+            status: status.key,
+            statusLabel: status.label,
+            health: health.state,
+            healthLabel: health.label,
+            running: activePtyIds.has(session.sessionId),
+            starred: !!session.starred,
+            archived: !!session.archived,
+            modified: session.modified || session.created || '',
+            messageCount: session.messageCount || 0,
+            turnCount: session.userMessageCount || 0,
+            activeMinutes: session.activeMinutes || 0,
+            cacheReadTokens: session.cacheReadTokens || 0,
+            worktreeLabel:
+              typeof getWorktreeLabel === 'function' ? getWorktreeLabel(session) || '' : '',
+            gitLabel: gitSummary?.label || '',
+            gitDetail: gitSummary?.detail || '',
+            gitLevel: gitSummary?.level || '',
+            fileSummary: fileSummary?.label || '',
+            fileSummaryType: fileSummary?.type || '',
+            queuedCount:
+              typeof queuedCount === 'function' && typeof promptQueueStore !== 'undefined'
+                ? queuedCount(promptQueueStore, session.sessionId)
+                : 0,
+            attentionReason: attentionReason.get(session.sessionId)?.reason || '',
+            groupId: group?.id || '',
+            groupName: group?.name || '',
+            groupColor: group?.color || '',
+            groupOrder: group?.order ?? Number.MAX_SAFE_INTEGER,
+            task: agentTaskBySession.get(session.sessionId) || '',
+          };
+        }),
+        updatedAt: Date.now(),
+      },
+    }),
+  );
+}
+
 function refreshSidebar({ resort = false } = {}) {
   // When searching, always use all projects (search ignores archive filter)
   let projects = (searchMatchIds !== null)
     ? cachedAllProjects
     : (showArchived ? cachedAllProjects : cachedProjects);
+  seedInboxArrivalTimes(getAllKnownSessionsForStatus());
 
   if (searchMatchIds !== null) {
     projects = projects.map(p => {
@@ -1028,6 +1457,7 @@ function refreshSidebar({ resort = false } = {}) {
 
   renderProjects(projects, resort);
   if (typeof updateCollapseAllToggle === 'function') updateCollapseAllToggle();
+  publishSessionOverview();
 }
 
 // --- Archive toggle ---
@@ -1340,11 +1770,21 @@ function updateRunningIndicators() {
       attentionSessions.delete(id);
       attentionReason.delete(id);
       responseReadySessions.delete(id);
+      inboxArrivalTime.delete(id);
       sessionBusyState.delete(id);
       agentTaskBySession.delete(id);
+      completedSessions.delete(id);
+      completedTaskBySession.delete(id);
+      authoritativeBusyState.delete(id);
+      const authoritativeTimer = authoritativeBusyTimers.get(id);
+      if (authoritativeTimer) clearTimeout(authoritativeTimer);
+      authoritativeBusyTimers.delete(id);
       const taskTimer = agentTaskTimers.get(id);
       if (taskTimer) clearTimeout(taskTimer);
       agentTaskTimers.delete(id);
+      const taskClearTimer = agentTaskClearTimers.get(id);
+      if (taskClearTimer) clearTimeout(taskClearTimer);
+      agentTaskClearTimers.delete(id);
     }
     const dot = item.querySelector('.session-status-dot');
     if (dot) dot.classList.toggle('running', running);
@@ -1397,6 +1837,7 @@ setInterval(() => {
 
 // Shared session map so all caches reference the same objects
 const sessionMap = new Map();
+let onboardingChecked = false;
 
 function dedup(projects) {
   for (const p of projects) {
@@ -1478,6 +1919,14 @@ async function loadProjects({ resort = false } = {}) {
   // stay stale until the layout is reset or the grid is toggled off and on.
   if (gridViewActive) refreshGridView();
   renderDefaultStatus();
+  if (!onboardingChecked) {
+    onboardingChecked = true;
+    const sessionCount = cachedAllProjects.reduce(
+      (total, project) => total + (project.sessions?.length || 0),
+      0,
+    );
+    maybeShowProductivityOnboarding(sessionCount);
+  }
 }
 
 // Sidebar rendering (slugId, folderId, buildSlugGroup, renderProjects,
@@ -1575,6 +2024,7 @@ function seedSessionWhenReady(sessionId, seedText) {
     if (settled || timedOut) {
       seeded = true;
       // Bracketed paste keeps the multi-line markdown packet intact, then submit.
+      beginAgentTurn(sessionId);
       window.api.sendInput(sessionId, `\x1b[200~${seedText}\x1b[201~\r`);
       recordTimelineEvent(sessionId, 'started', 'Handoff seeded', 'Seeded fresh session with the handoff packet.');
       return;
@@ -1715,6 +2165,7 @@ if (timelineKindFilter) {
 
 async function openSession(session, customOptions) {
   const { sessionId, projectPath } = session;
+  clearRecentlyExitedSession(sessionId);
 
   // If already open, handle closed-session cleanup or just show it
   if (openSessions.has(sessionId)) {
@@ -1764,6 +2215,7 @@ async function openSession(session, customOptions) {
 // terminal entry exists. Callers batch these and trigger a single grid rebuild.
 async function attachRunningSession(session) {
   const { sessionId, projectPath } = session;
+  clearRecentlyExitedSession(sessionId);
   const existing = openSessions.get(sessionId);
   if (existing) {
     if (!existing.closed) return true; // already mounted — nothing to do

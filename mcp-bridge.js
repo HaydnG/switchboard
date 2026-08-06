@@ -12,6 +12,10 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const net = require('net');
+const {
+  authorizeProjectPath,
+  logRejectedOperation,
+} = require('./security-hardening');
 
 const IDE_DIR = path.join(os.homedir(), '.claude', 'ide');
 
@@ -178,15 +182,33 @@ async function handleToolCall(entry, rpcId, params, log) {
   }
 }
 
+function authorizeMcpPath(entry, rpcId, operation, filePath, log) {
+  const authorization = authorizeProjectPath(filePath, entry.workspaceFolders);
+  if (authorization.ok) return authorization.path;
+
+  logRejectedOperation(log, {
+    source: 'mcp',
+    operation,
+    target: filePath,
+    reason: authorization.reason,
+  });
+  sendError(entry, rpcId, -32001, authorization.error);
+  return null;
+}
+
 async function handleOpenDiff(entry, rpcId, args, log) {
-  const { old_file_path, new_file_contents, tab_name } = args;
+  const { old_file_path, new_file_path, new_file_contents, tab_name } = args;
+  const oldFilePath = authorizeMcpPath(entry, rpcId, 'openDiff:old', old_file_path, log);
+  if (!oldFilePath) return;
+  const newFilePath = authorizeMcpPath(entry, rpcId, 'openDiff:new', new_file_path, log);
+  if (!newFilePath) return;
 
   // Read the current file from disk
   let oldContent = '';
   try {
-    oldContent = fs.readFileSync(old_file_path, 'utf8');
+    oldContent = fs.readFileSync(oldFilePath, 'utf8');
   } catch {
-    log.debug(`[mcp] Could not read ${old_file_path} — treating as new file`);
+    log.debug(`[mcp] Could not read ${oldFilePath} — treating as new file`);
   }
 
   const diffId = crypto.randomUUID();
@@ -199,7 +221,8 @@ async function handleOpenDiff(entry, rpcId, args, log) {
   // Send to renderer
   if (entry.mainWindow && !entry.mainWindow.isDestroyed()) {
     entry.mainWindow.webContents.send('mcp-open-diff', entry.sessionId, diffId, {
-      oldFilePath: old_file_path,
+      oldFilePath,
+      newFilePath,
       oldContent,
       newContent: new_file_contents,
       tabName: tab_name,
@@ -233,17 +256,19 @@ async function handleOpenDiff(entry, rpcId, args, log) {
 
 async function handleOpenFile(entry, rpcId, args, log) {
   const { filePath, preview, startText, endText } = args;
+  const authorizedPath = authorizeMcpPath(entry, rpcId, 'openFile', filePath, log);
+  if (!authorizedPath) return;
 
   let content = '';
   try {
-    content = fs.readFileSync(filePath, 'utf8');
+    content = fs.readFileSync(authorizedPath, 'utf8');
   } catch (err) {
-    log.debug(`[mcp] Could not read ${filePath}: ${err.message}`);
+    log.debug(`[mcp] Could not read ${authorizedPath}: ${err.message}`);
   }
 
   if (entry.mainWindow && !entry.mainWindow.isDestroyed()) {
     entry.mainWindow.webContents.send('mcp-open-file', entry.sessionId, {
-      filePath,
+      filePath: authorizedPath,
       content,
       preview: preview ?? false,
       startText: startText || '',
@@ -343,6 +368,7 @@ async function startMcpServer(sessionId, workspaceFolders, mainWindow, log) {
     authToken,
     lockFilePath,
     mainWindow,
+    workspaceFolders: [...workspaceFolders],
     ws: null,
     pendingDiffs: new Map(),
   };
@@ -351,7 +377,12 @@ async function startMcpServer(sessionId, workspaceFolders, mainWindow, log) {
     // Validate auth
     const headerAuth = req.headers['x-claude-code-ide-authorization'];
     if (headerAuth !== authToken) {
-      log.warn(`[mcp] session=${sessionId} rejected connection: bad auth`);
+      logRejectedOperation(log, {
+        source: 'mcp',
+        operation: 'connect',
+        target: req.socket?.remoteAddress,
+        reason: 'invalid authorization token',
+      });
       ws.close(4001, 'Unauthorized');
       return;
     }
@@ -485,4 +516,5 @@ module.exports = {
   resolvePendingDiff,
   rekeyMcpServer,
   cleanStaleLockFiles,
+  _handleMessageForTest: handleMessage,
 };

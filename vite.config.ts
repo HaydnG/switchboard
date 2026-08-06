@@ -18,6 +18,7 @@ export default defineConfig({
       name: 'SwitchboardUI',
       formats: ['iife'],
       fileName: () => 'react-app.js',
+      cssFileName: 'react-app',
     },
     outDir: 'public/dist',
     emptyOutDir: true,

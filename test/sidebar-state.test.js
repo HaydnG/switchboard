@@ -53,7 +53,7 @@ test('projectHasAssignedUserGroups detects assigned members even when stopped', 
   assert.equal(projectHasAssignedUserGroups(groupsState, projectSessions), true);
 });
 
-test('expandUserGroupsForRunningFilter keeps empty groups with stopped members', () => {
+test('expandUserGroupsForRunningFilter excludes groups with no visible sessions', () => {
   const groupsState = {
     groups: [{ id: 'g1', name: 'Backend', color: '#8088ff', order: 0 }],
     assignments: { s1: 'g1', s2: 'g1' },
@@ -65,15 +65,8 @@ test('expandUserGroupsForRunningFilter keeps empty groups with stopped members',
   const runningOnly = [{ sessionId: 's1', archived: false, modified: '2026-01-02T00:00:00Z' }];
   const filteredGrouped = [{ group: groupsState.groups[0], sessions: runningOnly }];
 
-  const expanded = expandUserGroupsForRunningFilter(
-    groupsState,
-    projectSessions,
-    [],
-    { showArchived: false, searchActive: false },
-  );
+  const expanded = expandUserGroupsForRunningFilter(groupsState, projectSessions, []);
 
-  assert.equal(expanded.grouped.length, 1);
-  assert.equal(expanded.grouped[0].group.id, 'g1');
-  assert.deepEqual(expanded.grouped[0].sessions, []);
-  assert.deepEqual([...expanded.assignedSessionIds].sort(), ['s1', 's2']);
+  assert.equal(expanded.grouped.length, 0);
+  assert.deepEqual([...expanded.assignedSessionIds], []);
 });

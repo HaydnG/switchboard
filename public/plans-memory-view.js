@@ -11,6 +11,7 @@ let cachedMemoryData = { global: { files: [] }, projects: [] };
 let currentMemoryFilePath = null;
 let currentMemoryContent = "";
 const memoryCollapsedState = new Map();
+let cachedScheduleViews = new Map();
 
 // --- Plans ---
 async function loadPlans() {
@@ -109,8 +110,29 @@ function hidePlanViewer() {
 // --- Memory ---
 
 async function loadMemories() {
-  cachedMemoryData = await window.api.getMemories();
+  const [memoryData, scheduleViews] = await Promise.all([
+    window.api.getMemories(),
+    loadScheduleSupervision(),
+  ]);
+  cachedMemoryData = memoryData;
+  cachedScheduleViews = new Map(scheduleViews.map(view => [view.id, view]));
   renderMemories();
+}
+
+async function loadScheduleSupervision() {
+  try {
+    const schedules = await window.api.getSchedules();
+    const views = await Promise.all(
+      schedules.map(async schedule => {
+        const runs = await window.api.listScheduleRuns(schedule.id, 1);
+        return buildScheduleView(schedule, runs[0] || null);
+      }),
+    );
+    return sortScheduleViews(views);
+  } catch (error) {
+    console.error('Failed to load schedule supervision:', error);
+    return [];
+  }
 }
 
 function renderMemories(filterIds) {
@@ -215,7 +237,18 @@ function buildMemoryItem(file) {
 
   const metaEl = document.createElement('div');
   metaEl.className = 'session-meta';
-  metaEl.textContent = formatDate(new Date(file.modified));
+  const scheduleView = isSchedule ? cachedScheduleViews.get(file.filePath) : null;
+  if (scheduleView) {
+    const next = scheduleView.nextRun ? `Next ${formatDate(new Date(scheduleView.nextRun))}` : 'Disabled';
+    metaEl.textContent =
+      scheduleView.state === 'failed'
+        ? `Last run failed • ${next}`
+        : `${next} • ${scheduleView.cron}`;
+    metaEl.classList.add(`schedule-state-${scheduleView.state}`);
+    if (scheduleView.lastError) metaEl.title = scheduleView.lastError;
+  } else {
+    metaEl.textContent = formatDate(new Date(file.modified));
+  }
 
   info.appendChild(titleEl);
   info.appendChild(pathEl);
@@ -248,6 +281,11 @@ function buildMemoryItem(file) {
       }, 2000);
       if (result && !result.ok) {
         console.error('Schedule run failed:', result.error);
+        showControlToast({ message: result.error || 'Schedule run failed.' });
+      } else if (result?.ok) {
+        const views = await loadScheduleSupervision();
+        cachedScheduleViews = new Map(views.map(view => [view.id, view]));
+        renderMemories();
       }
     });
     row.appendChild(playBtn);
