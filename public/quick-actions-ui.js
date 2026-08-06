@@ -60,6 +60,7 @@ function performQuickAction(sessionId, action, anchor) {
     openQuickReplyComposer(sessionId, anchor);
     return;
   }
+  if (typeof beginAgentTurn === 'function') beginAgentTurn(sessionId);
   window.api.sendInput(sessionId, action.send);
   recordTimelineEvent(
     sessionId,
@@ -70,6 +71,7 @@ function performQuickAction(sessionId, action, anchor) {
   // Optimistic: the prompt was answered. If the agent is still blocked, the
   // hook/OSC attention source re-flags the session on its next signal.
   attentionSessions.delete(sessionId);
+  if (!responseReadySessions.has(sessionId)) inboxArrivalTime.delete(sessionId);
   attentionReason.delete(sessionId);
   const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
   if (item) item.classList.remove('needs-attention');
@@ -122,6 +124,7 @@ function openQuickReplyComposer(sessionId, anchor) {
     if (busy) {
       queuePromptForSession(sessionId, text);
     } else {
+      if (typeof beginAgentTurn === 'function') beginAgentTurn(sessionId);
       window.api.sendInput(sessionId, `\x1b[200~${text}\x1b[201~\r`);
       recordTimelineEvent(sessionId, 'quick-action', 'Quick reply sent', 'Replied without focusing the terminal.');
       clearUnread(sessionId);

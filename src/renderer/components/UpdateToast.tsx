@@ -21,8 +21,7 @@ export function UpdateToast({ toast, onRestart, onDismiss }: UpdateToastProps) {
       <span id="update-toast-msg">
         New Version Ready
         <br />
-        <span className="update-version">v{version}</span>{' '}
-        (
+        <span className="update-version">v{version}</span> (
         <a href={RELEASE_NOTES_URL} target="_blank" rel="noreferrer" className="update-notes-link">
           release notes
         </a>

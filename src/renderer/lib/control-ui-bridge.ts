@@ -1,4 +1,8 @@
-import type { ControlDialogOptions, ControlDialogResult, ControlToastOptions } from '@renderer/types/control-ui';
+import type {
+  ControlDialogOptions,
+  ControlDialogResult,
+  ControlToastOptions,
+} from '@renderer/types/control-ui';
 
 type ShowDialogFn = (options: ControlDialogOptions) => Promise<ControlDialogResult>;
 type ShowToastFn = (options: ControlToastOptions) => void;

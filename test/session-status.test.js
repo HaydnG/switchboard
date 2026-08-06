@@ -3,8 +3,12 @@ const assert = require('node:assert/strict');
 
 const {
   getAgentTaskFromTitle,
+  getCliBusySignalFromTitle,
   getAgentTaskFromTerminalData,
+  shouldEndTaskFallbackActivity,
+  shouldResumeCompletedSession,
   getSessionStatus,
+  isStaleOpenSession,
   getAttentionInboxItems,
   getNextAttentionInboxItem,
   getStatusCounts,
@@ -21,6 +25,7 @@ function state(overrides = {}) {
     sessionBusyState: new Map(),
     openSessions: new Map(),
     lastActivityTime: new Map(),
+    inboxArrivalTime: new Map(),
     activeSessionId: null,
     ...overrides,
   };
@@ -40,6 +45,14 @@ test('does not expose non-Claude terminal titles as agent tasks', () => {
   assert.equal(getAgentTaskFromTitle(''), '');
 });
 
+test('CLI title signals clear a busy state when the spinner is replaced', () => {
+  assert.equal(getCliBusySignalFromTitle('⠸ Add CORS field ⟦esc⟧', false), true);
+  assert.equal(getCliBusySignalFromTitle('✳ Ready for input', true), false);
+  assert.equal(getCliBusySignalFromTitle('Claude Code', true), false);
+  assert.equal(getCliBusySignalFromTitle('', true), false);
+  assert.equal(getCliBusySignalFromTitle('zsh — switchboard', false), null);
+});
+
 test('extracts an OMP task from terminal UI output', () => {
   const output = '\x1b[2K\r\x1b[38;5;245m⠸\x1b[0m Add CORS field to admin config \x1b[2m⟦esc⟧\x1b[0m';
   assert.equal(getAgentTaskFromTerminalData(output), 'Add CORS field to admin config');
@@ -48,6 +61,19 @@ test('extracts an OMP task from terminal UI output', () => {
 test('ignores terminal output without an OMP task line', () => {
   assert.equal(getAgentTaskFromTerminalData('Compiling application…'), '');
   assert.equal(getAgentTaskFromTerminalData('\x1b]0;zsh\x07'), '');
+});
+
+test('task fallback only ends activity without an authoritative busy signal', () => {
+  assert.equal(shouldEndTaskFallbackActivity(true), false);
+  assert.equal(shouldEndTaskFallbackActivity(false), true);
+  assert.equal(shouldEndTaskFallbackActivity(undefined), true);
+});
+
+test('completed sessions only resume automatically for a genuinely new task', () => {
+  assert.equal(shouldResumeCompletedSession('Run tests', 'Run tests'), false);
+  assert.equal(shouldResumeCompletedSession('', 'Run tests'), false);
+  assert.equal(shouldResumeCompletedSession('Run tests', ''), false);
+  assert.equal(shouldResumeCompletedSession('Run tests', 'Fix failures'), true);
 });
 
 test('session status prioritizes needs-attention over other states', () => {
@@ -97,7 +123,50 @@ test('session status distinguishes busy, running, exited, and idle', () => {
   assert.equal(getSessionStatus(idle, runtime).key, 'idle');
 });
 
-test('attention inbox orders human-critical sessions first then recent activity', () => {
+test('stale-open detection requires an open session inactive for over two days', () => {
+  const now = Date.parse('2026-08-05T12:00:00.000Z');
+  const openRuntime = state({ activePtyIds: new Set(['open']) });
+
+  assert.equal(isStaleOpenSession(
+    { sessionId: 'open', modified: '2026-08-02T11:59:59.000Z' },
+    openRuntime,
+    { now },
+  ), true);
+  assert.equal(isStaleOpenSession(
+    { sessionId: 'open', modified: '2026-08-03T12:00:00.000Z' },
+    openRuntime,
+    { now },
+  ), false);
+  assert.equal(isStaleOpenSession(
+    { sessionId: 'open', modified: '2026-08-04T12:00:00.000Z' },
+    openRuntime,
+    { now },
+  ), false);
+});
+
+test('stale-open detection includes stuck working sessions and excludes stopped sessions', () => {
+  const now = Date.parse('2026-08-05T12:00:00.000Z');
+  const session = { sessionId: 'session', modified: '2026-08-01T12:00:00.000Z' };
+
+  assert.equal(isStaleOpenSession(session, state({
+    activePtyIds: new Set(['session']),
+    sessionBusyState: new Map([['session', true]]),
+  }), { now }), true);
+  assert.equal(isStaleOpenSession(session, state(), { now }), false);
+});
+
+test('recent runtime activity prevents an open session being marked stale', () => {
+  const now = Date.parse('2026-08-05T12:00:00.000Z');
+  const session = { sessionId: 'open', modified: '2026-07-01T12:00:00.000Z' };
+  const runtime = state({
+    activePtyIds: new Set(['open']),
+    lastActivityTime: new Map([['open', new Date('2026-08-05T11:00:00.000Z')]]),
+  });
+
+  assert.equal(isStaleOpenSession(session, runtime, { now }), false);
+});
+
+test('attention inbox puts actionable sessions first and orders each lane by activity', () => {
   const sessions = [
     { sessionId: 'running-old', modified: '2026-06-12T09:00:00.000Z', summary: 'old run' },
     { sessionId: 'ready', modified: '2026-06-12T10:00:00.000Z', summary: 'ready' },
@@ -110,7 +179,54 @@ test('attention inbox orders human-critical sessions first then recent activity'
     attentionSessions: new Set(['attention']),
   }));
 
-  assert.deepEqual(result.map(item => item.session.sessionId), ['attention', 'ready', 'running-old']);
+  assert.deepEqual(result.map(item => item.session.sessionId), ['ready', 'attention', 'running-old']);
+});
+
+test('attention inbox keeps actionable sessions ordered by arrival, not terminal activity', () => {
+  const sessions = [
+    { sessionId: 'first', modified: '2026-06-12T09:00:00.000Z' },
+    { sessionId: 'second', modified: '2026-06-12T10:00:00.000Z' },
+  ];
+  const result = getAttentionInboxItems(sessions, state({
+    attentionSessions: new Set(['first', 'second']),
+    // `first` emitted more output later, but it should not displace the newer
+    // actionable card that arrived after it.
+    lastActivityTime: new Map([
+      ['first', new Date('2026-06-12T12:00:00.000Z')],
+      ['second', new Date('2026-06-12T11:00:00.000Z')],
+    ]),
+    inboxArrivalTime: new Map([
+      ['first', Date.parse('2026-06-12T10:30:00.000Z')],
+      ['second', Date.parse('2026-06-12T11:30:00.000Z')],
+    ]),
+  }));
+
+  assert.deepEqual(result.map(item => item.session.sessionId), ['second', 'first']);
+});
+
+test('working and open status changes do not reshuffle the active lane', () => {
+  const sessions = [
+    { sessionId: 'older', modified: '2026-06-12T09:00:00.000Z' },
+    { sessionId: 'newer', modified: '2026-06-12T10:00:00.000Z' },
+  ];
+  const runtime = state({
+    activePtyIds: new Set(['older', 'newer']),
+    sessionBusyState: new Map([['older', true]]),
+    inboxArrivalTime: new Map([
+      ['older', Date.parse('2026-06-12T10:00:00.000Z')],
+      ['newer', Date.parse('2026-06-12T11:00:00.000Z')],
+    ]),
+  });
+
+  assert.deepEqual(
+    getAttentionInboxItems(sessions, runtime).map(item => item.session.sessionId),
+    ['newer', 'older'],
+  );
+  runtime.sessionBusyState = new Map([['newer', true]]);
+  assert.deepEqual(
+    getAttentionInboxItems(sessions, runtime).map(item => item.session.sessionId),
+    ['newer', 'older'],
+  );
 });
 
 test('next attention inbox item cycles after the current session', () => {
@@ -125,9 +241,9 @@ test('next attention inbox item cycles after the current session', () => {
     attentionSessions: new Set(['attention']),
   });
 
-  assert.equal(getNextAttentionInboxItem(sessions, runtime, null).session.sessionId, 'attention');
-  assert.equal(getNextAttentionInboxItem(sessions, runtime, 'attention').session.sessionId, 'ready');
-  assert.equal(getNextAttentionInboxItem(sessions, runtime, 'running-old').session.sessionId, 'attention');
+  assert.equal(getNextAttentionInboxItem(sessions, runtime, null).session.sessionId, 'ready');
+  assert.equal(getNextAttentionInboxItem(sessions, runtime, 'ready').session.sessionId, 'attention');
+  assert.equal(getNextAttentionInboxItem(sessions, runtime, 'running-old').session.sessionId, 'ready');
 });
 
 test('next attention inbox item returns null when inbox is empty', () => {
@@ -151,6 +267,10 @@ test('status counts group busy and running sessions under active', () => {
     responseReadySessions: new Set(['ready']),
     activePtyIds: new Set(['busy', 'running']),
     sessionBusyState: new Map([['busy', true]]),
+    lastActivityTime: new Map([
+      ['busy', new Date()],
+      ['running', new Date(Date.now() - 3 * 24 * 60 * 60 * 1000)],
+    ]),
   }));
 
   assert.deepEqual(counts, {
@@ -158,6 +278,7 @@ test('status counts group busy and running sessions under active', () => {
     attention: 1,
     ready: 1,
     active: 2,
+    staleOpen: 1,
   });
 });
 
@@ -174,12 +295,17 @@ test('status filters return sessions matching the requested grid mode', () => {
     responseReadySessions: new Set(['ready']),
     activePtyIds: new Set(['busy', 'running']),
     sessionBusyState: new Map([['busy', true]]),
+    lastActivityTime: new Map([
+      ['busy', new Date()],
+      ['running', new Date(Date.now() - 3 * 24 * 60 * 60 * 1000)],
+    ]),
   });
 
   assert.deepEqual(getFilteredSessionsByStatus(sessions, runtime, 'all').map(s => s.sessionId), ['attention', 'ready', 'busy', 'running', 'idle']);
   assert.deepEqual(getFilteredSessionsByStatus(sessions, runtime, 'attention').map(s => s.sessionId), ['attention']);
   assert.deepEqual(getFilteredSessionsByStatus(sessions, runtime, 'ready').map(s => s.sessionId), ['ready']);
   assert.deepEqual(getFilteredSessionsByStatus(sessions, runtime, 'active').map(s => s.sessionId), ['busy', 'running']);
+  assert.deepEqual(getFilteredSessionsByStatus(sessions, runtime, 'stale').map(s => s.sessionId), ['running']);
 });
 
 test('grid auto-open targets every live PTY that is not already open', () => {

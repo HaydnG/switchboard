@@ -203,6 +203,21 @@ function createScheduleSession(schedule) {
   return { sessionId, jsonlPath };
 }
 
+function getScheduleId(schedule) {
+  return schedule.filePath || `${schedule.folder || 'unknown'}:${schedule.slug || schedule.name}`;
+}
+
+function recordScheduleRun(run, log) {
+  try {
+    // Lazy require preserves the module's native-binding-free testability.
+    const { saveScheduleRun } = require('./db');
+    return saveScheduleRun(run);
+  } catch (error) {
+    if (log) log.warn(`[schedule] Could not persist run history: ${error.message}`);
+    return null;
+  }
+}
+
 // Defense-in-depth: reject control chars in frontmatter values (shell-quoter is the real defense)
 function isSafeScalar(s) {
   if (s == null) return true;
@@ -282,10 +297,34 @@ function startScheduler(log, runCommand) {
       try {
         const { sessionId } = createScheduleSession(schedule);
         const { claudeArgs } = buildScheduleCommand(sessionId, schedule);
+        const runId = crypto.randomUUID();
+        const scheduleId = getScheduleId(schedule);
+        const startedAt = new Date().toISOString();
+        recordScheduleRun({
+          id: runId,
+          scheduleId,
+          status: 'running',
+          startedAt,
+          sessionId,
+          runtime: 'claude',
+          metadata: { name: schedule.name, cron: schedule.cron },
+        }, log);
 
         runningTasks.add(taskKey);
-        runCommand(claudeArgs, schedule.projectPath, schedule.name, () => {
+        runCommand(claudeArgs, schedule.projectPath, schedule.name, (result = {}) => {
           runningTasks.delete(taskKey);
+          const succeeded = result.code === 0 && !result.error;
+          recordScheduleRun({
+            id: runId,
+            scheduleId,
+            status: succeeded ? 'succeeded' : 'failed',
+            startedAt,
+            finishedAt: new Date().toISOString(),
+            sessionId,
+            runtime: 'claude',
+            metadata: { name: schedule.name, cron: schedule.cron, exitCode: result.code },
+            error: succeeded ? null : result.error || `Process exited with code ${result.code}`,
+          }, log);
         });
       } catch (err) {
         log.error(`[schedule] Failed to run ${schedule.name}:`, err);
@@ -307,4 +346,13 @@ function startScheduler(log, runCommand) {
   };
 }
 
-module.exports = { parseFrontmatter, cronMatches, scanSchedules, startScheduler, createScheduleSession, buildScheduleCommand };
+module.exports = {
+  parseFrontmatter,
+  cronMatches,
+  scanSchedules,
+  startScheduler,
+  createScheduleSession,
+  buildScheduleCommand,
+  getScheduleId,
+  recordScheduleRun,
+};

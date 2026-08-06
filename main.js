@@ -4,14 +4,23 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const http = require('http');
+const { pathToFileURL } = require('url');
 const pty = require('node-pty');
 const log = require('electron-log');
 const attentionSource = require('./public/attention-source');
+const { getCliBusySignalFromTitle } = require('./public/session-status');
 // getFolderIndexMtimeMs moved to session-cache.js
 const { startMcpServer, shutdownMcpServer, shutdownAll: shutdownAllMcp, resolvePendingDiff, rekeyMcpServer, cleanStaleLockFiles } = require('./mcp-bridge');
 const { fetchAndTransformUsage } = require('./claude-auth');
 const { withMainProcessUsageCache } = require('./usage-cache');
 const { shouldUseSingleInstanceLock } = require('./main-lifecycle');
+const { buildDiagnosticsReport } = require('./diagnostics-report');
+const {
+  authorizeProjectPath,
+  buildSafeCommandPrefix,
+  isTrustedIpcSender,
+  logRejectedOperation,
+} = require('./security-hardening');
 log.transports.file.level = app.isPackaged ? 'info' : 'debug';
 log.transports.console.level = app.isPackaged ? 'info' : 'debug';
 
@@ -87,6 +96,10 @@ const {
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
   getSetting, setSetting, deleteSetting,
+  listSavedViews, saveSavedView, deleteSavedView,
+  getSessionNote, setSessionNote, deleteSessionNote,
+  getSessionTags, setSessionTags,
+  listScheduleRuns,
   closeDb,
 } = require('./db');
 
@@ -94,29 +107,8 @@ const PROJECTS_DIR = getRuntime('claude').sessionsDir;
 const PLANS_DIR = path.join(os.homedir(), '.claude', 'plans');
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const STATS_CACHE_PATH = path.join(CLAUDE_DIR, 'stats-cache.json');
+const MAIN_DOCUMENT_URL = pathToFileURL(path.join(__dirname, 'public', 'index.html')).href;
 const MAX_BUFFER_SIZE = 256 * 1024;
-
-// --- Path validation for IPC file operations ---
-// Sensitive paths that should never be read/written via the file panel IPC.
-// The file panel intentionally opens arbitrary files (OSC8 hyperlinks from
-// terminal output), so we block known-sensitive locations rather than
-// allowlisting. The primary XSS→file-access chain is mitigated by CSP +
-// DOMPurify; this is defense-in-depth.
-const SENSITIVE_PATH_PATTERNS = [
-  /[/\\]\.ssh[/\\]/i,
-  /[/\\]\.gnupg[/\\]/i,
-  /[/\\]\.aws[/\\]credentials/i,
-  /[/\\]\.env$/i,
-  /[/\\]\.env\.local$/i,
-  /[/\\]\.netrc$/i,
-  /[/\\]\.docker[/\\]config\.json$/i,
-  /[/\\]\.kube[/\\]config$/i,
-];
-
-function isSensitivePath(filePath) {
-  const resolved = path.resolve(filePath);
-  return SENSITIVE_PATH_PATTERNS.some(pattern => pattern.test(resolved));
-}
 
 // Stricter allowlist for memory/plan files that should only be under ~/.claude/
 // or active project directories.
@@ -129,18 +121,54 @@ function isAllowedMemoryPath(filePath) {
   return false;
 }
 
-// --- Input sanitization for shell command arguments ---
-const SHELL_META_CHARS = /[;&|`$(){}!#\n\r]/;
-function validateShellArg(value, fieldName) {
-  if (!value) return;
-  if (SHELL_META_CHARS.test(value)) {
-    throw new Error(`${fieldName} contains invalid characters`);
-  }
-}
-
 // Active PTY sessions
 const activeSessions = new Map();
 let mainWindow = null;
+
+function getAuthorizedProjectRoots() {
+  const roots = new Set();
+  for (const [, activeSession] of activeSessions) {
+    if (activeSession.projectPath) roots.add(activeSession.projectPath);
+  }
+  try {
+    for (const cached of getAllCached()) {
+      if (cached.projectPath) roots.add(cached.projectPath);
+    }
+    for (const folderMeta of getAllFolderMeta().values()) {
+      if (folderMeta.projectPath) roots.add(folderMeta.projectPath);
+    }
+  } catch (err) {
+    log.warn('[security] failed to load authorized project roots', err?.message || String(err));
+  }
+  return roots;
+}
+
+function isTrustedMainFrame(event, operation) {
+  if (isTrustedIpcSender(event, mainWindow, MAIN_DOCUMENT_URL)) return true;
+  logRejectedOperation(log, {
+    source: 'ipc',
+    operation,
+    target: event?.senderFrame?.url,
+    reason: 'untrusted sender frame',
+  });
+  return false;
+}
+
+function authorizeFilePanelPath(event, operation, filePath) {
+  if (!isTrustedMainFrame(event, operation)) {
+    return { ok: false, error: 'operation rejected' };
+  }
+  const authorization = authorizeProjectPath(filePath, getAuthorizedProjectRoots());
+  if (!authorization.ok) {
+    logRejectedOperation(log, {
+      source: 'ipc',
+      operation,
+      target: filePath,
+      reason: authorization.reason,
+    });
+  }
+  return authorization;
+}
 
 // Coalesce bursty PTY output before crossing Electron's main→renderer IPC
 // boundary. Terminal ordering is preserved per session, while the renderer's
@@ -199,8 +227,20 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
+      // Keep the sandbox explicit until a packaged Electron smoke test covers
+      // preload's native webUtils.getPathForFile drag/drop bridge. node:test
+      // cannot prove that native File conversion across supported platforms.
+      sandbox: false,
     },
   });
+  const smokeErrors = [];
+  if (process.env.SWITCHBOARD_SMOKE_TEST === '1') {
+    mainWindow.webContents.on('console-message', (_event, details) => {
+      if (details.level === 'error' || details.level === 3) {
+        smokeErrors.push(String(details.message || '').slice(0, 500));
+      }
+    });
+  }
 
   // Set position after creation to prevent macOS from clamping size
   if (restorePosition) {
@@ -239,6 +279,61 @@ function createWindow() {
       };
       void 0;
     `);
+    if (process.env.SWITCHBOARD_SMOKE_TEST === '1') {
+      setTimeout(async () => {
+        try {
+          const state = await mainWindow.webContents.executeJavaScript(`({
+            api: !!window.api,
+            app: !!document.getElementById('app-container'),
+            react: !!document.getElementById('react-root'),
+            sidebar: !!document.getElementById('sidebar'),
+            status: !!document.getElementById('status-bar'),
+            shellInactive: !document.body.classList.contains('sb-shell-active'),
+            shellSlotsAbsent: !document.getElementById('react-shell-sidebar')
+              && !document.getElementById('react-shell-topbar')
+              && !document.getElementById('react-shell-inspector'),
+            legacySidebarVisible: getComputedStyle(document.getElementById('sidebar')).display !== 'none',
+            legacyIconTabs: document.querySelectorAll('#sidebar-tabs .sidebar-tab').length === 4,
+            legacySessionList: !!document.getElementById('sidebar-content')
+          })`);
+          const ready = Object.values(state).every(Boolean) && smokeErrors.length === 0;
+          if (ready) {
+            if (process.env.SWITCHBOARD_SMOKE_VIEW === 'grid') {
+              await mainWindow.webContents.executeJavaScript(
+                "document.getElementById('grid-toggle-btn')?.click(); void 0",
+              );
+              await new Promise(resolve => setTimeout(resolve, 150));
+            } else if (process.env.SWITCHBOARD_SMOKE_VIEW === 'groups') {
+              const legacySidebarReady = await mainWindow.webContents.executeJavaScript(`(() => {
+                const sidebar = document.getElementById('sidebar');
+                return !!sidebar
+                  && getComputedStyle(sidebar).display !== 'none'
+                  && document.querySelectorAll('#sidebar-tabs .sidebar-tab').length === 4
+                  && !!document.getElementById('sidebar-content');
+              })()`);
+              if (!legacySidebarReady) {
+                throw new Error('Legacy sidebar did not render expected navigation and session list');
+              }
+            }
+            if (smokeErrors.length > 0) {
+              throw new Error(`Renderer errors: ${smokeErrors.join(' | ')}`);
+            }
+            if (process.env.SWITCHBOARD_SMOKE_SCREENSHOT) {
+              const image = await mainWindow.webContents.capturePage();
+              fs.writeFileSync(process.env.SWITCHBOARD_SMOKE_SCREENSHOT, image.toPNG());
+            }
+            console.log('[smoke] renderer-ready');
+            app.quit();
+          } else {
+            console.error('[smoke] renderer-failed', JSON.stringify({ state, smokeErrors }));
+            app.exit(1);
+          }
+        } catch (error) {
+          console.error('[smoke] renderer-failed', error.message);
+          app.exit(1);
+        }
+      }, 750);
+    }
   });
 
   // Prevent Cmd+R / Ctrl+Shift+R from reloading the page (Chromium built-in).
@@ -586,27 +681,28 @@ ipcMain.handle('clipboard-write-text', (_event, text) => {
 });
 
 // --- IPC: MCP bridge ---
-ipcMain.on('mcp-diff-response', (_event, sessionId, diffId, action, editedContent) => {
+ipcMain.on('mcp-diff-response', (event, sessionId, diffId, action, editedContent) => {
+  if (!isTrustedMainFrame(event, 'mcp-diff-response')) return;
   resolvePendingDiff(sessionId, diffId, action, editedContent);
 });
 
-ipcMain.handle('read-file-for-panel', async (_event, filePath) => {
+ipcMain.handle('read-file-for-panel', async (event, filePath) => {
   try {
-    const resolved = path.resolve(filePath);
-    if (isSensitivePath(resolved)) return { ok: false, error: 'access to sensitive path denied' };
-    const content = fs.readFileSync(resolved, 'utf8');
+    const authorization = authorizeFilePanelPath(event, 'read-file-for-panel', filePath);
+    if (!authorization.ok) return { ok: false, error: authorization.error };
+    const content = fs.readFileSync(authorization.path, 'utf8');
     return { ok: true, content };
   } catch (err) {
     return { ok: false, error: err.message };
   }
 });
 
-ipcMain.handle('save-file-for-panel', async (_event, filePath, content) => {
+ipcMain.handle('save-file-for-panel', async (event, filePath, content) => {
   try {
-    const resolved = path.resolve(filePath);
-    if (isSensitivePath(resolved)) return { ok: false, error: 'access to sensitive path denied' };
-    if (!fs.existsSync(resolved)) return { ok: false, error: 'File does not exist' };
-    fs.writeFileSync(resolved, content, 'utf8');
+    const authorization = authorizeFilePanelPath(event, 'save-file-for-panel', filePath);
+    if (!authorization.ok) return { ok: false, error: authorization.error };
+    if (!fs.existsSync(authorization.path)) return { ok: false, error: 'File does not exist' };
+    fs.writeFileSync(authorization.path, content, 'utf8');
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err.message };
@@ -616,9 +712,10 @@ ipcMain.handle('save-file-for-panel', async (_event, filePath, content) => {
 // ── File Watching (for viewer panels) ────────────────────────────────
 const fileWatchers = new Map(); // filePath → FSWatcher
 
-ipcMain.handle('watch-file', (_event, filePath) => {
-  const resolved = path.resolve(filePath);
-  if (isSensitivePath(resolved)) return { ok: false, error: 'access to sensitive path denied' };
+ipcMain.handle('watch-file', (event, filePath) => {
+  const authorization = authorizeFilePanelPath(event, 'watch-file', filePath);
+  if (!authorization.ok) return { ok: false, error: authorization.error };
+  const resolved = authorization.path;
   if (fileWatchers.has(resolved)) return { ok: true };
   try {
     let debounce = null;
@@ -638,8 +735,10 @@ ipcMain.handle('watch-file', (_event, filePath) => {
   }
 });
 
-ipcMain.handle('unwatch-file', (_event, filePath) => {
-  const resolved = path.resolve(filePath);
+ipcMain.handle('unwatch-file', (event, filePath) => {
+  const authorization = authorizeFilePanelPath(event, 'unwatch-file', filePath);
+  if (!authorization.ok) return { ok: false, error: authorization.error };
+  const resolved = authorization.path;
   const watcher = fileWatchers.get(resolved);
   if (watcher) {
     watcher.close();
@@ -650,12 +749,16 @@ ipcMain.handle('unwatch-file', (_event, filePath) => {
 
 ipcMain.handle('get-projects', (_event, showArchived) => {
   try {
-    const needsPopulate = !isCachePopulated() || !isSearchIndexPopulated();
-
-    if (needsPopulate) {
+    const hasSessionCache = isCachePopulated();
+    const hasSearchIndex = isSearchIndexPopulated();
+    if (!hasSessionCache) {
       populateCacheViaWorker();
       return [];
     }
+    // A missing/recreated FTS index should not blank an otherwise useful
+    // session sidebar. Rebuild search in the background and return cached
+    // projects immediately.
+    if (!hasSearchIndex) populateCacheViaWorker();
 
     // Pick up folders changed while the app was closed, or never indexed by an
     // older build, so sessions/worktrees don't silently go missing. Stat-gated,
@@ -856,6 +959,9 @@ ipcMain.handle('refresh-stats', async () => {
 
 // --- IPC: get-usage (lightweight, API-only, no PTY) ---
 ipcMain.handle('get-usage', async () => {
+  if (process.env.SWITCHBOARD_SMOKE_TEST === '1') {
+    return { _error: true, message: 'Usage lookup disabled during smoke tests' };
+  }
   const cachedUsage = getSetting('usage:lastSuccessful');
   try {
     const usage = await fetchAndTransformUsage() || {};
@@ -1256,6 +1362,67 @@ ipcMain.handle('get-effective-settings', (_event, projectPath) => {
   return effective;
 });
 
+ipcMain.handle('list-saved-views', (event) => {
+  if (!isTrustedMainFrame(event, 'list-saved-views')) return [];
+  return listSavedViews();
+});
+
+ipcMain.handle('save-saved-view', (event, view) => {
+  if (!isTrustedMainFrame(event, 'save-saved-view')) {
+    return { ok: false, error: 'operation rejected' };
+  }
+  try {
+    return { ok: true, view: saveSavedView(view) };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+});
+
+ipcMain.handle('delete-saved-view', (event, id) => {
+  if (!isTrustedMainFrame(event, 'delete-saved-view')) {
+    return { ok: false, error: 'operation rejected' };
+  }
+  try {
+    return { ok: true, deleted: deleteSavedView(id) };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-session-annotations', (event, sessionId) => {
+  if (!isTrustedMainFrame(event, 'get-session-annotations')) {
+    return { note: '', tags: [] };
+  }
+  const note = getSessionNote(sessionId);
+  return { note: note?.note || '', updatedAt: note?.updatedAt || null, tags: getSessionTags(sessionId) };
+});
+
+ipcMain.handle('set-session-annotations', (event, sessionId, annotations) => {
+  if (!isTrustedMainFrame(event, 'set-session-annotations')) {
+    return { ok: false, error: 'operation rejected' };
+  }
+  try {
+    const note = typeof annotations?.note === 'string' ? annotations.note : '';
+    const tags = Array.isArray(annotations?.tags) ? annotations.tags : [];
+    if (note) setSessionNote(sessionId, note);
+    else deleteSessionNote(sessionId);
+    const savedTags = setSessionTags(sessionId, tags);
+    return { ok: true, note, tags: savedTags };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+});
+
+ipcMain.handle('list-schedule-runs', (event, scheduleId, limit) => {
+  if (!isTrustedMainFrame(event, 'list-schedule-runs')) return [];
+  try {
+    return listScheduleRuns(scheduleId, limit);
+  } catch (error) {
+    log.warn('[schedule] Failed to list run history:', error.message);
+    return [];
+  }
+});
+
 // --- IPC: get-active-sessions ---
 ipcMain.handle('get-active-sessions', () => {
   const active = [];
@@ -1280,7 +1447,8 @@ ipcMain.handle('get-active-terminals', () => {
 // session's working directory; raw strings, parsed by the renderer's pure
 // git-summary module). Only sessions with a live PTY are polled, so the path
 // is validated against the directories we actually spawned into.
-ipcMain.handle('get-git-summary', async (_event, projectPath) => {
+ipcMain.handle('get-git-summary', async (event, projectPath) => {
+  if (!isTrustedMainFrame(event, 'get-git-summary')) return { ok: false };
   if (typeof projectPath !== 'string' || !projectPath) return { ok: false };
   let isKnown = false;
   for (const [, session] of activeSessions) {
@@ -1308,7 +1476,10 @@ ipcMain.handle('get-git-summary', async (_event, projectPath) => {
 });
 
 // --- IPC: stop-session ---
-ipcMain.handle('stop-session', (_event, sessionId) => {
+ipcMain.handle('stop-session', (event, sessionId) => {
+  if (!isTrustedMainFrame(event, 'stop-session')) {
+    return { ok: false, error: 'operation rejected' };
+  }
   const session = activeSessions.get(sessionId);
   if (!session || session.exited) return { ok: false, error: 'not running' };
   session.pty.kill();
@@ -1316,13 +1487,19 @@ ipcMain.handle('stop-session', (_event, sessionId) => {
 });
 
 // --- IPC: toggle-star ---
-ipcMain.handle('toggle-star', (_event, sessionId) => {
+ipcMain.handle('toggle-star', (event, sessionId) => {
+  if (!isTrustedMainFrame(event, 'toggle-star')) {
+    return { starred: null, error: 'operation rejected' };
+  }
   const starred = toggleStar(sessionId);
   return { starred };
 });
 
 // --- IPC: rename-session ---
-ipcMain.handle('rename-session', (_event, sessionId, name) => {
+ipcMain.handle('rename-session', (event, sessionId, name) => {
+  if (!isTrustedMainFrame(event, 'rename-session')) {
+    return { error: 'operation rejected' };
+  }
   setName(sessionId, name || null);
   // Update search index title to include the new name
   const cached = getCachedSession(sessionId);
@@ -1334,7 +1511,10 @@ ipcMain.handle('rename-session', (_event, sessionId, name) => {
 ipcMain.handle('get-agent-runtimes', () => getRuntimeUiCatalog());
 
 // --- IPC: archive-session ---
-ipcMain.handle('read-session-jsonl', (_event, sessionId) => {
+ipcMain.handle('read-session-jsonl', (event, sessionId) => {
+  if (!isTrustedMainFrame(event, 'read-session-jsonl')) {
+    return { error: 'operation rejected' };
+  }
   const cached = getCachedSession(sessionId);
   if (!cached) return { error: 'Session not found in cache' };
   const runtime = getRuntime(cached.runtime);
@@ -1358,14 +1538,20 @@ ipcMain.handle('read-session-jsonl', (_event, sessionId) => {
   }
 });
 
-ipcMain.handle('archive-session', (_event, sessionId, archived) => {
+ipcMain.handle('archive-session', (event, sessionId, archived) => {
+  if (!isTrustedMainFrame(event, 'archive-session')) {
+    return { error: 'operation rejected' };
+  }
   const val = archived ? 1 : 0;
   setArchived(sessionId, val);
   return { archived: val };
 });
 
 // --- IPC: open-terminal ---
-ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, sessionOptions) => {
+ipcMain.handle('open-terminal', async (event, sessionId, projectPath, isNew, sessionOptions) => {
+  if (!isTrustedMainFrame(event, 'open-terminal')) {
+    return { ok: false, error: 'operation rejected' };
+  }
   if (!mainWindow) return { ok: false, error: 'no window' };
 
   // Reattach to existing session
@@ -1484,11 +1670,9 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       let agentCmd = runtimeDef.command + ' ' + quoteArgvForShell(shell, agentArgs);
 
       if (sessionOptions?.preLaunchCmd) {
-        const pre = String(sessionOptions.preLaunchCmd);
-        if (/[\r\n]/.test(pre)) {
-          return { ok: false, error: 'preLaunchCmd must not contain newlines' };
-        }
-        agentCmd = pre + ' ' + agentCmd;
+        // Parse the executable prefix into argv, then quote each token for the
+        // selected shell. User text is never interpolated as shell syntax.
+        agentCmd = buildSafeCommandPrefix(shell, sessionOptions.preLaunchCmd) + ' ' + agentCmd;
       }
 
       if (runtimeDef.supportsMcp && sessionOptions?.mcpEmulation !== false) {
@@ -1545,25 +1729,42 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         const payload = m[2].slice(0, 120);
         // Detect Claude CLI busy state from window-title OSC sequences. Terminals
         // and CLI versions commonly use OSC 0, 1, or 2 for the same title.
-        // Braille spinner chars mean work is in progress; ✳ means the CLI is idle.
+        // Braille spinner chars mean work is in progress. Any subsequent
+        // non-spinner title ends that busy period; newer CLI versions do not
+        // consistently restore the historical ✳ idle title.
         if (code === '0' || code === '1' || code === '2') {
           const firstChar = payload.charAt(0);
-          const isBusy = firstChar.charCodeAt(0) >= 0x2800 && firstChar.charCodeAt(0) <= 0x28FF;
-          const isIdle = firstChar === '\u2733'; // ✳
-          log.debug(`[OSC 0] session=${currentId} char=U+${firstChar.charCodeAt(0).toString(16).toUpperCase()} busy=${isBusy} idle=${isIdle} wasBusy=${!!session._cliBusy}`);
-          if (isBusy && !session._cliBusy) {
+          const busyTitleCodes = session._busyTitleCodes || new Set();
+          session._busyTitleCodes = busyTitleCodes;
+          const codeWasBusy = busyTitleCodes.has(code);
+          const busySignal = getCliBusySignalFromTitle(payload, codeWasBusy);
+          const now = Date.now();
+          const wasBusy = !!session._cliBusy;
+          const shouldHeartbeat = busySignal === true
+            && (!wasBusy || now - (session._lastBusyHeartbeatAt || 0) >= 1000);
+          log.debug(`[OSC ${code}] session=${currentId} char=U+${firstChar.charCodeAt(0).toString(16).toUpperCase()} signal=${busySignal} codeWasBusy=${codeWasBusy} wasBusy=${wasBusy}`);
+          if (busySignal === true) {
+            busyTitleCodes.add(code);
             session._cliBusy = true;
             session._oscIdle = false;
-            log.debug(`[OSC 0] session=${currentId} → BUSY`);
-            if (mainWindow && !mainWindow.isDestroyed()) {
+            if (!wasBusy) log.debug(`[OSC ${code}] session=${currentId} → BUSY`);
+            if (shouldHeartbeat && mainWindow && !mainWindow.isDestroyed()) {
+              session._lastBusyHeartbeatAt = now;
               mainWindow.webContents.send('cli-busy-state', currentId, true);
             }
-          } else if (isIdle && session._cliBusy) {
-            session._cliBusy = false;
-            session._oscIdle = true;
-            log.debug(`[OSC 0] session=${currentId} → IDLE`);
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send('cli-busy-state', currentId, false);
+          } else if (busySignal === false && codeWasBusy) {
+            // A non-spinner replacement on any title channel is a definitive
+            // idle edge. Some CLI versions set multiple OSC title codes while
+            // busy but only restore one of them when the turn ends.
+            busyTitleCodes.clear();
+            if (wasBusy) {
+              session._cliBusy = false;
+              session._oscIdle = true;
+              session._lastBusyHeartbeatAt = 0;
+              log.debug(`[OSC ${code}] session=${currentId} → IDLE`);
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('cli-busy-state', currentId, false);
+              }
             }
           }
         }
@@ -1577,11 +1778,15 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
           const level = payload.split(';')[1];
           if (level === '0') continue; // 4;0 is also used for clearing, making it unreliable as an idle signal
           log.debug(`[OSC 9;4] session=${currentId} level=${level} payload="${payload}" wasBusy=${!!session._cliBusy}`);
-          if ((level === '1' || level === '2' || level === '3') && !session._cliBusy) {
+          if (level === '1' || level === '2' || level === '3') {
+            const now = Date.now();
+            const wasBusy = !!session._cliBusy;
+            const shouldHeartbeat = !wasBusy || now - (session._lastBusyHeartbeatAt || 0) >= 1000;
             session._cliBusy = true;
             session._oscIdle = false;
-            log.debug(`[OSC 9;4] session=${currentId} → BUSY`);
-            if (mainWindow && !mainWindow.isDestroyed()) {
+            if (!wasBusy) log.debug(`[OSC 9;4] session=${currentId} → BUSY`);
+            if (shouldHeartbeat && mainWindow && !mainWindow.isDestroyed()) {
+              session._lastBusyHeartbeatAt = now;
               mainWindow.webContents.send('cli-busy-state', currentId, true);
             }
           }
@@ -1655,7 +1860,8 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
 });
 
 // --- IPC: terminal-input (fire-and-forget) ---
-ipcMain.on('terminal-input', (_event, sessionId, data) => {
+ipcMain.on('terminal-input', (event, sessionId, data) => {
+  if (!isTrustedMainFrame(event, 'terminal-input')) return;
   const session = activeSessions.get(sessionId);
   if (session && !session.exited) {
     session.pty.write(data);
@@ -1663,7 +1869,8 @@ ipcMain.on('terminal-input', (_event, sessionId, data) => {
 });
 
 // --- IPC: terminal-resize (fire-and-forget) ---
-ipcMain.on('terminal-resize', (_event, sessionId, cols, rows) => {
+ipcMain.on('terminal-resize', (event, sessionId, cols, rows) => {
+  if (!isTrustedMainFrame(event, 'terminal-resize')) return;
   const session = activeSessions.get(sessionId);
   if (session && !session.exited) {
     // For plain terminals, suppress buffering during resize to avoid
@@ -1692,7 +1899,8 @@ ipcMain.on('terminal-resize', (_event, sessionId, cols, rows) => {
 });
 
 // --- IPC: close-terminal ---
-ipcMain.on('close-terminal', (_event, sessionId) => {
+ipcMain.on('close-terminal', (event, sessionId) => {
+  if (!isTrustedMainFrame(event, 'close-terminal')) return;
   const session = activeSessions.get(sessionId);
   if (session) {
     session.rendererAttached = false;
@@ -1799,6 +2007,54 @@ function startProjectsWatcher() {
 
 // --- IPC: app version ---
 ipcMain.handle('get-app-version', () => app.getVersion());
+
+ipcMain.handle('export-diagnostics', async (event) => {
+  if (!isTrustedMainFrame(event, 'export-diagnostics')) {
+    return { ok: false, error: 'operation rejected' };
+  }
+  try {
+    let recentLogs = [];
+    try {
+      const logPath = log.transports.file.getFile().path;
+      recentLogs = fs.readFileSync(logPath, 'utf8').split(/\r?\n/).filter(Boolean);
+    } catch (error) {
+      recentLogs = [`Log file unavailable: ${error.message}`];
+    }
+    const cachedSessions = getAllCached();
+    const report = buildDiagnosticsReport({
+      appVersion: app.getVersion(),
+      isPackaged: app.isPackaged,
+      platform: process.platform,
+      arch: process.arch,
+      nodeVersion: process.versions.node,
+      electronVersion: process.versions.electron,
+      homeDirectory: os.homedir(),
+      runtimes: getRuntimeUiCatalog().map(runtime => ({
+        id: runtime.id,
+        available: true,
+        version: null,
+      })),
+      index: { ready: isCachePopulated() },
+      counts: {
+        sessions: cachedSessions.length,
+        running: [...activeSessions.values()].filter(session => !session.exited).length,
+        projects: new Set(cachedSessions.map(session => session.projectPath).filter(Boolean)).size,
+      },
+      recentLogs,
+    });
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: 'Export Switchboard diagnostics',
+      defaultPath: `switchboard-diagnostics-${new Date().toISOString().slice(0, 10)}.json`,
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    });
+    if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+    fs.writeFileSync(result.filePath, report, { encoding: 'utf8', mode: 0o600 });
+    return { ok: true, filePath: result.filePath };
+  } catch (error) {
+    log.error('[diagnostics] Export failed:', error.message);
+    return { ok: false, error: error.message };
+  }
+});
 
 // --- IPC: auto-updater ---
 ipcMain.handle('updater-check', () => {
@@ -1909,10 +2165,13 @@ if (!gotSingleInstanceLock) {
 
     buildMenu();
     createWindow();
-    createTray();
-    startProjectsWatcher();
-    startAttentionHookServer();
-    scheduleIpc.ensureScheduleCreatorCommand();
+    const smokeTest = process.env.SWITCHBOARD_SMOKE_TEST === '1';
+    if (!smokeTest) {
+      createTray();
+      startProjectsWatcher();
+      startAttentionHookServer();
+      scheduleIpc.ensureScheduleCreatorCommand();
+    }
 
     // Shared runCommand for cron scheduler and "run now" — takes argv, not a shell string.
     const { spawn: cpSpawn } = require('child_process');
@@ -1937,23 +2196,23 @@ if (!gotSingleInstanceLock) {
       child.on('exit', (code) => {
         if (stderr.trim()) log.error(`[schedule] ${name} stderr:\n${stderr.trim()}`);
         log.info(`[schedule] ${name} finished (exit ${code})`);
-        if (onDone) onDone();
+        if (onDone) onDone({ code, stderr: stderr.trim() });
       });
 
       child.on('error', (err) => {
         log.error(`[schedule] ${name} error:`, err.message);
-        if (onDone) onDone();
+        if (onDone) onDone({ code: null, error: err.message, stderr: stderr.trim() });
       });
     }
 
-    scheduleIpc.init(log, runScheduleCommand);
-    startScheduler(log, runScheduleCommand);
+    scheduleIpc.init(log, runScheduleCommand, isTrustedMainFrame);
+    if (!smokeTest) startScheduler(log, runScheduleCommand);
 
     // Re-index search if FTS table was recreated (e.g. tokenizer config change)
     if (searchFtsRecreated) populateCacheViaWorker();
 
     // Check for updates after launch
-    if (autoUpdater) {
+    if (autoUpdater && !smokeTest) {
       setTimeout(() => autoUpdater.checkForUpdates().catch(e => log.error('[updater] check failed:', e?.message || String(e))), 5000);
       // Re-check every 4 hours for long-running sessions
       setInterval(() => autoUpdater.checkForUpdates().catch(e => log.error('[updater] check failed:', e?.message || String(e))), 4 * 60 * 60 * 1000);

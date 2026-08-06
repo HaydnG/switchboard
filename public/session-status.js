@@ -5,6 +5,8 @@
     Object.assign(root, factory());
   }
 })(typeof window !== 'undefined' ? window : globalThis, function () {
+  const STALE_OPEN_THRESHOLD_MS = 2 * 24 * 60 * 60 * 1000;
+
   const STATUS = {
     needsAttention: {
       key: 'needs-attention',
@@ -69,6 +71,14 @@
       .trim();
   }
 
+  function getCliBusySignalFromTitle(title, wasBusy = false) {
+    if (typeof title !== 'string') return null;
+    const firstChar = title.charAt(0);
+    if (/^[\u2800-\u28ff]$/u.test(firstChar)) return true;
+    if (firstChar === '\u2733' || wasBusy) return false;
+    return null;
+  }
+
   // OMP renders the current task inside its terminal UI rather than publishing
   // it as a window title. Strip the common terminal control sequences first,
   // then extract its spinner + Esc-hint status line.
@@ -79,6 +89,16 @@
       .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
     const match = /[\u2800-\u28ff]\s+(.+?)\s*⟦esc⟧/iu.exec(text);
     return match ? match[1].trim() : '';
+  }
+
+  function shouldEndTaskFallbackActivity(authoritativeBusy) {
+    return authoritativeBusy !== true;
+  }
+
+  function shouldResumeCompletedSession(completedTask, nextTask) {
+    const previous = typeof completedTask === 'string' ? completedTask : '';
+    const next = typeof nextTask === 'string' ? nextTask : '';
+    return Boolean(previous && next && previous !== next);
   }
 
   function getSessionStatus(session, runtime = {}) {
@@ -101,13 +121,40 @@
     return Number.isFinite(time) ? time : 0;
   }
 
+  // Capture last activity when a session enters the inbox or changes lane. The
+  // frozen timestamp keeps concurrent agents from swapping places on every
+  // terminal repaint while still ordering each lane by recent activity.
+  function inboxArrivalTime(session, runtime = {}) {
+    const arrival = getMapValue(runtime.inboxArrivalTime, session.sessionId);
+    const time = arrival instanceof Date ? arrival.getTime() : Number(arrival);
+    return Number.isFinite(time) ? time : sessionActivityTime(session, runtime);
+  }
+
+  function isStaleOpenSession(session, runtime = {}, options = {}) {
+    if (!hasSetValue(runtime.activePtyIds, session.sessionId)) return false;
+    const activityTime = sessionActivityTime(session, runtime);
+    if (activityTime <= 0) return false;
+    const now = options.now === undefined ? Date.now() : Number(options.now);
+    const thresholdMs = options.thresholdMs === undefined
+      ? STALE_OPEN_THRESHOLD_MS
+      : Number(options.thresholdMs);
+    if (!Number.isFinite(now) || !Number.isFinite(thresholdMs) || thresholdMs < 0) return false;
+    return now - activityTime > thresholdMs;
+  }
+
+  function attentionLane(status) {
+    return status.key === 'needs-attention' || status.key === 'response-ready' ? 1 : 0;
+  }
+
   function getAttentionInboxItems(sessions, runtime = {}) {
     return sessions
       .map(session => ({ session, status: getSessionStatus(session, runtime) }))
       .filter(item => item.status.inInbox)
       .sort((a, b) => {
-        if (a.status.priority !== b.status.priority) return b.status.priority - a.status.priority;
-        return sessionActivityTime(b.session, runtime) - sessionActivityTime(a.session, runtime);
+        const laneOrder = attentionLane(b.status) - attentionLane(a.status);
+        if (laneOrder) return laneOrder;
+        const order = inboxArrivalTime(b.session, runtime) - inboxArrivalTime(a.session, runtime);
+        return order || a.session.sessionId.localeCompare(b.session.sessionId);
       });
   }
 
@@ -125,12 +172,13 @@
   }
 
   function getStatusCounts(sessions, runtime = {}) {
-    const counts = { all: sessions.length, attention: 0, ready: 0, active: 0 };
+    const counts = { all: sessions.length, attention: 0, ready: 0, active: 0, staleOpen: 0 };
     for (const session of sessions) {
       const status = getSessionStatus(session, runtime);
       if (status.key === 'needs-attention') counts.attention++;
       if (status.key === 'response-ready') counts.ready++;
       if (isActiveStatus(status)) counts.active++;
+      if (isStaleOpenSession(session, runtime)) counts.staleOpen++;
     }
     return counts;
   }
@@ -142,6 +190,7 @@
       if (filter === 'attention') return status.key === 'needs-attention';
       if (filter === 'ready') return status.key === 'response-ready';
       if (filter === 'active') return isActiveStatus(status);
+      if (filter === 'stale') return isStaleOpenSession(session, runtime);
       return true;
     });
   }
@@ -185,8 +234,13 @@
 
   return {
     getAgentTaskFromTitle,
+    getCliBusySignalFromTitle,
     getAgentTaskFromTerminalData,
+    shouldEndTaskFallbackActivity,
+    shouldResumeCompletedSession,
     getSessionStatus,
+    sessionActivityTime,
+    isStaleOpenSession,
     getAttentionInboxItems,
     getNextAttentionInboxItem,
     getStatusCounts,

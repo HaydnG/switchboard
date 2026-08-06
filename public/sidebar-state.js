@@ -29,39 +29,20 @@
     });
   }
 
-  // When "running only" is active, keep user-defined groups that still have
-  // assigned members in this project even if none are running. Session rows
-  // inside the group remain filtered to running members only.
+  // Running-only views must not render empty groups. Preserve only assignments
+  // represented by visible sessions so callers can hide empty group containers.
   function expandUserGroupsForRunningFilter(groupsState, projectSessions, filteredGrouped, options = {}) {
     if (!groupsState || !Array.isArray(groupsState.groups)) {
       return { grouped: filteredGrouped || [], assignedSessionIds: new Set() };
     }
 
-    const visible = filterSessionsForGroupVisibility(projectSessions, options);
-    const assignedByGroup = new Map();
-    for (const session of visible) {
-      const gid = groupsState.assignments?.[session.sessionId];
-      if (!gid) continue;
-      if (!assignedByGroup.has(gid)) assignedByGroup.set(gid, []);
-      assignedByGroup.get(gid).push(session);
-    }
-
-    const runningById = new Map((filteredGrouped || []).map(entry => [entry.group.id, entry.sessions]));
-    const orderedGroups = [...groupsState.groups].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-    const grouped = [];
     const assignedSessionIds = new Set();
-
-    for (const group of orderedGroups) {
-      const assigned = assignedByGroup.get(group.id);
-      if (!assigned || assigned.length === 0) continue;
-      for (const session of assigned) assignedSessionIds.add(session.sessionId);
-      grouped.push({
-        group,
-        sessions: runningById.get(group.id) || [],
-      });
+    for (const entry of filteredGrouped || []) {
+      for (const session of entry.sessions || []) {
+        assignedSessionIds.add(session.sessionId);
+      }
     }
-
-    return { grouped, assignedSessionIds };
+    return { grouped: filteredGrouped || [], assignedSessionIds };
   }
 
   return {

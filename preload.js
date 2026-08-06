@@ -28,10 +28,19 @@ contextBridge.exposeInMainWorld('api', {
   setSetting: (key, value) => ipcRenderer.invoke('set-setting', key, value),
   deleteSetting: (key) => ipcRenderer.invoke('delete-setting', key),
   getEffectiveSettings: (projectPath) => ipcRenderer.invoke('get-effective-settings', projectPath),
+  listSavedViews: () => ipcRenderer.invoke('list-saved-views'),
+  saveSavedView: (view) => ipcRenderer.invoke('save-saved-view', view),
+  deleteSavedView: (id) => ipcRenderer.invoke('delete-saved-view', id),
+  getSessionAnnotations: (sessionId) => ipcRenderer.invoke('get-session-annotations', sessionId),
+  setSessionAnnotations: (sessionId, annotations) =>
+    ipcRenderer.invoke('set-session-annotations', sessionId, annotations),
   getAgentRuntimes: () => ipcRenderer.invoke('get-agent-runtimes'),
   getScheduleCreatorCommand: () => ipcRenderer.invoke('get-schedule-creator-command'),
   createScheduleSession: (projectPath) => ipcRenderer.invoke('create-schedule-session', projectPath),
+  getSchedules: () => ipcRenderer.invoke('get-schedules'),
   runScheduleNow: (filePath) => ipcRenderer.invoke('run-schedule-now', filePath),
+  listScheduleRuns: (scheduleId, limit) =>
+    ipcRenderer.invoke('list-schedule-runs', scheduleId, limit),
   getShellProfiles: () => ipcRenderer.invoke('get-shell-profiles'),
 
   browseFolder: () => ipcRenderer.invoke('browse-folder'),
@@ -92,6 +101,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // App version
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+  exportDiagnostics: () => ipcRenderer.invoke('export-diagnostics'),
 
   // Auto-updater
   updaterCheck: () => ipcRenderer.invoke('updater-check'),

@@ -29,6 +29,7 @@ function getSessionRuntimeState() {
     sessionBusyState,
     openSessions,
     lastActivityTime,
+    inboxArrivalTime,
     activeSessionId,
   };
 }
@@ -45,6 +46,102 @@ function getAllRenderableSessions(projects) {
     }
   }
   return [...sessionsById.values()];
+}
+
+const sidebarSelectedSessionIds = new Set();
+
+function clearSidebarSelection() {
+  sidebarSelectedSessionIds.clear();
+  sidebarContent.querySelectorAll('.session-item.bulk-selected').forEach(item => {
+    item.classList.remove('bulk-selected');
+    item.setAttribute('aria-selected', 'false');
+  });
+  document.querySelector('.sidebar-selection-bar')?.remove();
+}
+
+function renderSidebarSelectionBar() {
+  document.querySelector('.sidebar-selection-bar')?.remove();
+  if (sidebarSelectedSessionIds.size === 0) return;
+
+  const bar = document.createElement('div');
+  bar.className = 'sidebar-selection-bar';
+  bar.setAttribute('role', 'toolbar');
+  bar.setAttribute('aria-label', 'Selected session actions');
+
+  const count = document.createElement('strong');
+  count.textContent = `${sidebarSelectedSessionIds.size} selected`;
+
+  const groupSelect = document.createElement('select');
+  groupSelect.className = 'sidebar-selection-group';
+  groupSelect.setAttribute('aria-label', 'Move selected sessions to group');
+  groupSelect.innerHTML = '<option value="">Move to group…</option><option value="__none__">Ungroup</option>';
+  for (const group of [...(groupsState?.groups || [])].sort(
+    (left, right) => (left.order ?? 0) - (right.order ?? 0),
+  )) {
+    const option = document.createElement('option');
+    option.value = group.id;
+    option.textContent = group.name;
+    groupSelect.appendChild(option);
+  }
+  groupSelect.onchange = () => {
+    const groupId = groupSelect.value === '__none__' ? null : groupSelect.value;
+    if (groupSelect.value) {
+      for (const sessionId of sidebarSelectedSessionIds) {
+        assignSessionToGroup(sessionId, groupId);
+      }
+      clearSidebarSelection();
+    }
+  };
+
+  const archive = document.createElement('button');
+  archive.type = 'button';
+  archive.className = 'sidebar-selection-archive';
+  archive.textContent = 'Archive';
+  archive.onclick = async () => {
+    const sessions = [...sidebarSelectedSessionIds]
+      .map(sessionId => sessionMap.get(sessionId))
+      .filter(Boolean);
+    const confirmed = await showControlDialog({
+      title: 'Archive Selected Sessions',
+      message: 'Running selections will be stopped first. Session files are not deleted.',
+      confirmLabel: `Archive ${sessions.length}`,
+      tone: 'warning',
+      details: {
+        Sessions: sessions.length,
+        Running: sessions.filter(session => activePtyIds.has(session.sessionId)).length,
+      },
+    });
+    if (!confirmed) return;
+    for (const session of sessions) {
+      if (activePtyIds.has(session.sessionId)) await window.api.stopSession(session.sessionId);
+      await window.api.archiveSession(session.sessionId, 1);
+      session.archived = 1;
+    }
+    clearSidebarSelection();
+    await loadProjects();
+    showControlToast({ message: `${sessions.length} sessions archived.` });
+  };
+
+  const clear = document.createElement('button');
+  clear.type = 'button';
+  clear.className = 'sidebar-selection-clear';
+  clear.textContent = 'Clear';
+  clear.onclick = clearSidebarSelection;
+
+  bar.append(count, groupSelect, archive, clear);
+  document.getElementById('sidebar')?.appendChild(bar);
+}
+
+function toggleSidebarSelection(sessionId) {
+  if (sidebarSelectedSessionIds.has(sessionId)) sidebarSelectedSessionIds.delete(sessionId);
+  else sidebarSelectedSessionIds.add(sessionId);
+  const item = document.getElementById(`si-${sessionId}`);
+  item?.classList.toggle('bulk-selected', sidebarSelectedSessionIds.has(sessionId));
+  item?.setAttribute(
+    'aria-selected',
+    sidebarSelectedSessionIds.has(sessionId) ? 'true' : 'false',
+  );
+  renderSidebarSelectionBar();
 }
 
 function shortSessionLabel(session) {
@@ -328,8 +425,9 @@ function buildAttentionInbox(projects) {
     const agentTask = agentTaskBySession.get(session.sessionId)
       || openSessions.get(session.sessionId)?.agentTask
       || '';
-    const taskLine = agentTask
-      ? `<span class="attention-inbox-task" title="${escapeHtml(agentTask)}">${escapeHtml(agentTask)}</span>`
+    const reservesTaskLine = status.key === 'busy' || status.key === 'running';
+    const taskLine = reservesTaskLine
+      ? `<span class="attention-inbox-task${agentTask ? '' : ' is-empty'}" title="${escapeHtml(agentTask)}">${agentTask ? escapeHtml(agentTask) : '&nbsp;'}</span>`
       : '';
     row.innerHTML = `
       <span class="status-pill attention-inbox-status">${escapeHtml(status.label)}</span>
@@ -571,12 +669,16 @@ function filterSidebarSessions(sessions) {
     filtered = filtered.filter(s => !s.archived);
   }
   if (showStarredOnly) filtered = filtered.filter(s => s.starred);
-  // "Running" must match the definition used everywhere else in the sidebar
-  // (sort priority, status dots, slug/group rollups): a session counts as running
-  // if its PTY is tracked OR it's a just-spawned pending session whose PTY hasn't
-  // been polled into activePtyIds yet. Without the pendingSessions check, a brand-new
-  // session is filtered out until an unrelated re-render (e.g. toggling the filter).
-  if (showRunningOnly) filtered = filtered.filter(s => activePtyIds.has(s.sessionId) || pendingSessions.has(s.sessionId));
+  // Keep newly spawned sessions visible until their PTY is polled, and retain a
+  // just-exited session briefly so its exit state can be seen before the active
+  // filter hides it.
+  if (showRunningOnly) {
+    filtered = filtered.filter(session => (
+      activePtyIds.has(session.sessionId)
+      || pendingSessions.has(session.sessionId)
+      || recentlyExitedSessions.has(session.sessionId)
+    ));
+  }
   if (showTodayOnly) {
     const now = new Date();
     const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -613,11 +715,7 @@ function sidebarGroupVisibilityOptions() {
 function processProjectSessions(project, resort) {
     let filtered = filterSidebarSessions(project.sessions);
     const anyFilterActive = showStarredOnly || showRunningOnly || showTodayOnly || searchMatchIds !== null;
-    const hasAssignedUserGroups = showRunningOnly
-      && typeof projectHasAssignedUserGroups === 'function'
-      && typeof groupsState !== 'undefined'
-      && projectHasAssignedUserGroups(groupsState, project.sessions, sidebarGroupVisibilityOptions());
-    if (filtered.length === 0 && !project._projectMatchedOnly && (project.sessions.length > 0 || anyFilterActive) && !hasAssignedUserGroups) return null;
+    if (filtered.length === 0 && !project._projectMatchedOnly && (project.sessions.length > 0 || anyFilterActive)) return null;
 
     filtered = sortSidebarSessions(filtered);
 
@@ -629,19 +727,8 @@ function processProjectSessions(project, resort) {
     let groupUngrouped;
     if (typeof groupSessions === 'function' && typeof groupsState !== 'undefined') {
       const partitioned = groupSessions(groupsState, filtered);
-      if (showRunningOnly && typeof expandUserGroupsForRunningFilter === 'function') {
-        const expanded = expandUserGroupsForRunningFilter(
-          groupsState,
-          project.sessions,
-          partitioned.grouped,
-          sidebarGroupVisibilityOptions(),
-        );
-        userGroups = expanded.grouped;
-        groupUngrouped = filtered.filter(s => !expanded.assignedSessionIds.has(s.sessionId));
-      } else {
-        userGroups = partitioned.grouped;
-        groupUngrouped = partitioned.ungrouped;
-      }
+      userGroups = partitioned.grouped;
+      groupUngrouped = partitioned.ungrouped;
     } else {
       userGroups = [];
       groupUngrouped = filtered;
@@ -671,16 +758,8 @@ function processProjectSessions(project, resort) {
       allItems.push({ sortTime: mostRecentTime, pinned: hasPinned, running: hasRunning, element });
     }
     for (const { group, sessions } of userGroups) {
-      // Don't render empty group sections unless "running only" is keeping them
-      // visible so the user can start a new session after stopping all members.
-      if ((!sessions || sessions.length === 0) && !showRunningOnly) continue;
-      const assignedInProject = (typeof filterSessionsForGroupVisibility === 'function' && typeof groupsState !== 'undefined')
-        ? filterSessionsForGroupVisibility(project.sessions, sidebarGroupVisibilityOptions())
-            .filter(s => groupsState.assignments?.[s.sessionId] === group.id)
-        : (sessions || []);
-      if (assignedInProject.length === 0) continue;
-      const timingSessions = (sessions && sessions.length > 0) ? sessions : assignedInProject;
-      const mostRecentTime = Math.max(...timingSessions.map(s => new Date(s.modified).getTime()));
+      if (!sessions || sessions.length === 0) continue;
+      const mostRecentTime = Math.max(...sessions.map(s => new Date(s.modified).getTime()));
       const hasRunning = sessions.some(s => activePtyIds.has(s.sessionId) || pendingSessions.has(s.sessionId));
       const hasPinned = sessions.some(s => s.starred);
       allItems.push({ sortTime: mostRecentTime, pinned: hasPinned, running: hasRunning, element: buildUserGroup(group, sessions) });
@@ -1024,17 +1103,10 @@ function renderProjectsFolderFirst(projects, resort) {
   const projectMissing = new Map();
   const projectRecency = new Map();
 
-  const groupVisibilityOptions = sidebarGroupVisibilityOptions();
   for (const project of projects) {
     projectMissing.set(project.projectPath, !!project.missing);
     let filtered = filterSidebarSessions(project.sessions);
-    const visibleForGroups = typeof filterSessionsForGroupVisibility === 'function'
-      ? filterSessionsForGroupVisibility(project.sessions, groupVisibilityOptions)
-      : project.sessions;
-    const hasAssignedUserGroups = showRunningOnly
-      && typeof projectHasAssignedUserGroups === 'function'
-      && projectHasAssignedUserGroups(groupsState, project.sessions, groupVisibilityOptions);
-    if (filtered.length === 0 && !hasAssignedUserGroups) continue;
+    if (filtered.length === 0) continue;
     filtered = sortSidebarSessions(filtered);
     for (const session of filtered) {
       const t = new Date(session.modified).getTime();
@@ -1047,14 +1119,6 @@ function renderProjectsFolderFirst(projects, resort) {
       } else {
         if (!ungroupedByProject.has(project.projectPath)) ungroupedByProject.set(project.projectPath, []);
         ungroupedByProject.get(project.projectPath).push(session);
-      }
-    }
-    if (showRunningOnly) {
-      for (const session of visibleForGroups) {
-        const gid = assignments[session.sessionId];
-        if (!gid || !groupIds.has(gid)) continue;
-        const bucket = folderBuckets.get(gid);
-        if (!bucket.has(project.projectPath)) bucket.set(project.projectPath, []);
       }
     }
   }
@@ -1446,6 +1510,11 @@ function rebindSidebarEvents(projects) {
 
     const openSessionFromRow = (e) => {
       if (e?.target?.closest?.('.session-actions, .session-pin, .session-health-chip')) return;
+      if (e?.shiftKey || e?.metaKey || e?.ctrlKey) {
+        e.preventDefault();
+        toggleSidebarSelection(session.sessionId);
+        return;
+      }
       openSession(session);
     };
     item.onclick = openSessionFromRow;
@@ -1453,7 +1522,10 @@ function rebindSidebarEvents(projects) {
 
     // Drag a session row onto a group folder to assign it (property assignment
     // rather than addEventListener so morphdom-reused rows don't stack handlers).
-    item.onpointerdown = (e) => startSidebarSessionDrag(session, item, e);
+    item.onpointerdown = (e) => {
+      if (e.shiftKey || e.metaKey || e.ctrlKey) return;
+      startSidebarSessionDrag(session, item, e);
+    };
 
     const pin = item.querySelector('.session-pin');
     if (pin) {
@@ -1494,6 +1566,22 @@ function rebindSidebarEvents(projects) {
         showHandoffPrompt(session);
       };
     });
+
+    const annotationsBtn = item.querySelector('.session-annotations-btn');
+    if (annotationsBtn) {
+      annotationsBtn.onclick = (e) => {
+        e.stopPropagation();
+        showSessionAnnotationsDialog(session);
+      };
+    }
+
+    const transferBtn = item.querySelector('.session-transfer-btn');
+    if (transferBtn) {
+      transferBtn.onclick = (e) => {
+        e.stopPropagation();
+        showContextTransferDialog(session);
+      };
+    }
 
     const forkBtn = item.querySelector('.session-fork-btn');
     if (forkBtn) {
@@ -1642,14 +1730,24 @@ function buildSessionItem(session) {
   if (attentionSessions.has(session.sessionId)) item.classList.add('needs-attention');
   if (responseReadySessions.has(session.sessionId)) item.classList.add('response-ready');
   if (sessionBusyState.get(session.sessionId)) item.classList.add('cli-busy');
+  if (sidebarSelectedSessionIds.has(session.sessionId)) {
+    item.classList.add('bulk-selected');
+    item.setAttribute('aria-selected', 'true');
+  } else {
+    item.setAttribute('aria-selected', 'false');
+  }
   item.dataset.sessionId = session.sessionId;
 
   const modified = lastActivityTime.get(session.sessionId) || new Date(session.modified);
   const timeStr = formatDate(modified);
   const displayName = cleanDisplayName(session.name || session.aiTitle || session.summary);
-  const status = getSessionStatus(session, getSessionRuntimeState());
+  const runtimeState = getSessionRuntimeState();
+  const status = getSessionStatus(session, runtimeState);
+  const staleOpen = isStaleOpenSession(session, runtimeState);
+  const statusLabel = staleOpen ? `${status.label} · 2d+ idle` : status.label;
   const health = getSessionHealth(session);
   item.classList.add(status.className);
+  if (staleOpen) item.classList.add('stale-open');
   item.classList.add(health.className);
 
   const row = document.createElement('div');
@@ -1686,7 +1784,8 @@ function buildSessionItem(session) {
 
   const statusChip = document.createElement('span');
   statusChip.className = `session-detail-pill session-status-chip ${status.className}`;
-  statusChip.textContent = status.label;
+  statusChip.textContent = statusLabel;
+  if (staleOpen) statusChip.title = 'Open with no activity for over 2 days';
   detailEl.appendChild(statusChip);
   if (health.state !== 'healthy') {
     const healthChip = document.createElement('button');
@@ -1787,11 +1886,23 @@ function buildSessionItem(session) {
   handoffBtn.title = 'Create handoff';
   handoffBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7h8"/><path d="M8 11h8"/><path d="M8 15h5"/><path d="M5 3h14a2 2 0 0 1 2 2v14l-4-3H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/></svg>';
 
+  const annotationsBtn = document.createElement('button');
+  annotationsBtn.className = 'session-annotations-btn';
+  annotationsBtn.title = 'Notes and tags';
+  annotationsBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h6M8 17h4"/></svg>';
+
+  const transferBtn = document.createElement('button');
+  transferBtn.className = 'session-transfer-btn';
+  transferBtn.title = 'Send context';
+  transferBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13"/><path d="m14 8 4 4-4 4"/><path d="M5 5v14"/></svg>';
+
   actions.appendChild(stopBtn);
   actions.appendChild(copyIdBtn);
   actions.appendChild(groupBtn);
   if (session.type !== 'terminal') {
     if (health.state !== 'healthy') actions.appendChild(handoffBtn);
+    actions.appendChild(annotationsBtn);
+    actions.appendChild(transferBtn);
     actions.appendChild(forkBtn);
     actions.appendChild(timelineBtn);
     actions.appendChild(jsonlBtn);

@@ -122,8 +122,30 @@ function ensureScheduleCreatorCommand() {
   }
 }
 
-function init(log, runCommand) {
-  const { parseFrontmatter, createScheduleSession, buildScheduleCommand } = require('./schedule-runner');
+function isAllowedSchedulePath(filePath) {
+  if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) return false;
+  try {
+    const resolved = fs.realpathSync(filePath);
+    return (
+      path.basename(resolved).startsWith('schedule-') &&
+      path.extname(resolved) === '.md' &&
+      path.basename(path.dirname(resolved)) === 'commands' &&
+      path.basename(path.dirname(path.dirname(resolved))) === '.claude'
+    );
+  } catch {
+    return false;
+  }
+}
+
+function init(log, runCommand, isTrustedMainFrame = () => true) {
+  const {
+    parseFrontmatter,
+    createScheduleSession,
+    buildScheduleCommand,
+    getScheduleId,
+    recordScheduleRun,
+    scanSchedules,
+  } = require('./schedule-runner');
 
   ipcMain.handle('get-schedule-creator-command', () => {
     try {
@@ -182,8 +204,30 @@ function init(log, runCommand) {
       return null;
     }
   });
-  ipcMain.handle('run-schedule-now', (_event, filePath) => {
+  ipcMain.handle('get-schedules', (event) => {
+    if (!isTrustedMainFrame(event, 'get-schedules')) return [];
+    return scanSchedules(log).map((schedule) => ({
+      id: getScheduleId(schedule),
+      file: schedule.file,
+      filePath: schedule.filePath,
+      projectPath: schedule.projectPath,
+      name: schedule.name,
+      cron: schedule.cron,
+      slug: schedule.slug,
+      enabled: true,
+    }));
+  });
+  ipcMain.handle('run-schedule-now', (event, filePath) => {
     try {
+      if (!isTrustedMainFrame(event, 'run-schedule-now')) {
+        return { ok: false, error: 'operation rejected' };
+      }
+      if (!fs.existsSync(filePath)) {
+        return { ok: false, error: 'Schedule file no longer exists' };
+      }
+      if (!isAllowedSchedulePath(filePath)) {
+        return { ok: false, error: 'Schedule path is not authorized' };
+      }
       const content = fs.readFileSync(filePath, 'utf8');
       const { meta, body } = parseFrontmatter(content);
       if (!body) return { ok: false, error: 'No prompt in schedule file' };
@@ -205,8 +249,38 @@ function init(log, runCommand) {
 
       const { sessionId } = createScheduleSession(schedule);
       const { claudeArgs } = buildScheduleCommand(sessionId, schedule);
+      const runId = crypto.randomUUID();
+      const scheduleId = getScheduleId(schedule);
+      const startedAt = new Date().toISOString();
+      recordScheduleRun({
+        id: runId,
+        scheduleId,
+        status: 'running',
+        startedAt,
+        sessionId,
+        runtime: 'claude',
+        metadata: { name: schedule.name, cron: schedule.cron, manual: true },
+      }, log);
 
-      runCommand(claudeArgs, projectPath, `Manual run ${schedule.name}`, () => {});
+      runCommand(claudeArgs, projectPath, `Manual run ${schedule.name}`, (result = {}) => {
+        const succeeded = result.code === 0 && !result.error;
+        recordScheduleRun({
+          id: runId,
+          scheduleId,
+          status: succeeded ? 'succeeded' : 'failed',
+          startedAt,
+          finishedAt: new Date().toISOString(),
+          sessionId,
+          runtime: 'claude',
+          metadata: {
+            name: schedule.name,
+            cron: schedule.cron,
+            manual: true,
+            exitCode: result.code,
+          },
+          error: succeeded ? null : result.error || `Process exited with code ${result.code}`,
+        }, log);
+      });
 
       log.info(`[schedule] Manual run triggered: ${schedule.name} (session ${sessionId})`);
       return { ok: true, sessionId };
@@ -217,4 +291,4 @@ function init(log, runCommand) {
   });
 }
 
-module.exports = { ensureScheduleCreatorCommand, init };
+module.exports = { ensureScheduleCreatorCommand, init, isAllowedSchedulePath };
