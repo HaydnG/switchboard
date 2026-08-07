@@ -204,28 +204,38 @@ test('attention inbox keeps actionable sessions ordered by arrival, not terminal
   assert.deepEqual(result.map(item => item.session.sessionId), ['second', 'first']);
 });
 
-test('working and open status changes do not reshuffle the active lane', () => {
+test('working sessions lead the inbox and stay stable within their lane', () => {
   const sessions = [
-    { sessionId: 'older', modified: '2026-06-12T09:00:00.000Z' },
-    { sessionId: 'newer', modified: '2026-06-12T10:00:00.000Z' },
+    { sessionId: 'working-older', modified: '2026-06-12T09:00:00.000Z' },
+    { sessionId: 'working-newer', modified: '2026-06-12T10:00:00.000Z' },
+    { sessionId: 'open-latest', modified: '2026-06-12T11:00:00.000Z' },
+    { sessionId: 'ready-latest', modified: '2026-06-12T12:00:00.000Z' },
   ];
   const runtime = state({
-    activePtyIds: new Set(['older', 'newer']),
-    sessionBusyState: new Map([['older', true]]),
+    activePtyIds: new Set(['working-older', 'working-newer', 'open-latest']),
+    responseReadySessions: new Set(['ready-latest']),
+    sessionBusyState: new Map([
+      ['working-older', true],
+      ['working-newer', true],
+    ]),
     inboxArrivalTime: new Map([
-      ['older', Date.parse('2026-06-12T10:00:00.000Z')],
-      ['newer', Date.parse('2026-06-12T11:00:00.000Z')],
+      ['working-older', Date.parse('2026-06-12T10:00:00.000Z')],
+      ['working-newer', Date.parse('2026-06-12T11:00:00.000Z')],
+      ['open-latest', Date.parse('2026-06-12T12:00:00.000Z')],
+      ['ready-latest', Date.parse('2026-06-12T13:00:00.000Z')],
     ]),
   });
 
   assert.deepEqual(
     getAttentionInboxItems(sessions, runtime).map(item => item.session.sessionId),
-    ['newer', 'older'],
+    ['working-newer', 'working-older', 'ready-latest', 'open-latest'],
   );
-  runtime.sessionBusyState = new Map([['newer', true]]);
+  runtime.lastActivityTime = new Map([
+    ['working-older', new Date('2026-06-12T13:00:00.000Z')],
+  ]);
   assert.deepEqual(
     getAttentionInboxItems(sessions, runtime).map(item => item.session.sessionId),
-    ['newer', 'older'],
+    ['working-newer', 'working-older', 'ready-latest', 'open-latest'],
   );
 });
 
