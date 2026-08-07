@@ -143,7 +143,9 @@
   }
 
   function attentionLane(status) {
-    return status.key === 'needs-attention' || status.key === 'response-ready' ? 1 : 0;
+    if (status.key === 'busy') return 2;
+    if (status.key === 'needs-attention' || status.key === 'response-ready') return 1;
+    return 0;
   }
 
   function getAttentionInboxItems(sessions, runtime = {}) {
