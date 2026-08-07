@@ -654,12 +654,12 @@ function setActivity(sessionId, active) {
 
   const wasActive = sessionBusyState.get(sessionId) || false;
   sessionBusyState.set(sessionId, active);
+  if (wasActive !== active) captureInboxActivityTime(sessionId);
 
   if (wasActive && !active) {
     // Activity ended → response-ready if user isn't looking at this session
     if (sessionId !== activeSessionId) {
       responseReadySessions.add(sessionId);
-      captureInboxActivityTime(sessionId);
       recordTimelineEvent(sessionId, 'response-ready', 'Ready for review', 'Agent stopped producing output while this session was not focused.');
       const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
       if (item) {

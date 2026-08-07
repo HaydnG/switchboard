@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   classifyAttentionSignal,
   classifyHookEvent,
+  migrateAttentionHookDefaults,
   reduceAttention,
 } = require('../public/attention-source');
 
@@ -77,6 +78,23 @@ test('hook Stop maps to ready', () => {
   });
   assert.equal(result.kind, 'ready');
   assert.equal(result.source, 'hook');
+});
+
+test('attention hooks migrate on once and preserve later opt-outs', () => {
+  const migrated = migrateAttentionHookDefaults({ attentionHooks: false, theme: 'dark' });
+  assert.equal(migrated.changed, true);
+  assert.deepEqual(migrated.settings, {
+    attentionHooks: true,
+    attentionHooksDefaultVersion: 1,
+    theme: 'dark',
+  });
+
+  const optedOut = migrateAttentionHookDefaults({
+    attentionHooks: false,
+    attentionHooksDefaultVersion: 1,
+  });
+  assert.equal(optedOut.changed, false);
+  assert.equal(optedOut.settings.attentionHooks, false);
 });
 
 test('hook PermissionRequest maps to needs-attention', () => {
