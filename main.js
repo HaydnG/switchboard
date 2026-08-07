@@ -1182,7 +1182,7 @@ ipcMain.handle('delete-setting', (_event, key) => {
 // (registered as `type: "http"` hooks in ~/.claude/settings.json) and forwards a
 // normalized `attention-signal` to the renderer. The hook payload's `session_id`
 // is the Claude session UUID — exactly Switchboard's realSessionId — so no extra
-// correlation is needed. OSC-9 remains the default heuristic + fallback.
+// correlation is needed. OSC-9 remains a fallback.
 const CLAUDE_SETTINGS_JSON = path.join(os.homedir(), '.claude', 'settings.json');
 // Sentinel in the hook URL path so we can find & remove only our own handlers.
 const ATTENTION_HOOK_MARK = '/switchboard-attention-hook';
@@ -1190,9 +1190,15 @@ const ATTENTION_HOOK_MARK = '/switchboard-attention-hook';
 let attentionHookServer = null;
 let attentionHookPort = null;
 
+function migrateAttentionHookDefault() {
+  const current = getSetting('global') || {};
+  const migration = attentionSource.migrateAttentionHookDefaults(current);
+  if (migration.changed) setSetting('global', migration.settings);
+}
+
 function attentionHooksEnabled() {
   const global = getSetting('global') || {};
-  return global.attentionHooks === true;
+  return global.attentionHooks !== false;
 }
 
 function startAttentionHookServer() {
@@ -1333,6 +1339,7 @@ const SETTING_DEFAULTS = {
   sidebarWidth: 340,
   terminalTheme: 'switchboard',
   mcpEmulation: false,
+  attentionHooks: true,
   shellProfile: 'auto',
   piProvider: '',
   piModel: '',
@@ -2169,6 +2176,7 @@ if (!gotSingleInstanceLock) {
     if (!smokeTest) {
       createTray();
       startProjectsWatcher();
+      migrateAttentionHookDefault();
       startAttentionHookServer();
       scheduleIpc.ensureScheduleCreatorCommand();
     }
