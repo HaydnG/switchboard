@@ -91,7 +91,8 @@
     return match ? match[1].trim() : '';
   }
 
-  function shouldEndTaskFallbackActivity(authoritativeBusy) {
+  function shouldEndTaskFallbackActivity(authoritativeBusy, runtime = 'claude') {
+    if (runtime === 'omp' || runtime === 'pi') return true;
     return authoritativeBusy !== true;
   }
 

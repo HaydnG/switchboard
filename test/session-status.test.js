@@ -67,6 +67,8 @@ test('task fallback only ends activity without an authoritative busy signal', ()
   assert.equal(shouldEndTaskFallbackActivity(true), false);
   assert.equal(shouldEndTaskFallbackActivity(false), true);
   assert.equal(shouldEndTaskFallbackActivity(undefined), true);
+  assert.equal(shouldEndTaskFallbackActivity(true, 'omp'), true);
+  assert.equal(shouldEndTaskFallbackActivity(true, 'pi'), true);
 });
 
 test('completed sessions only resume automatically for a genuinely new task', () => {
