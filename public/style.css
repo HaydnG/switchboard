@@ -6136,42 +6136,66 @@ body.sidebar-session-dragging * {
 }
 .grid-region {
   --user-group-color: #6a6a80;
-  margin-bottom: 18px;
+  min-width: 0;
+  margin: 10px 0 26px;
+  padding: 0 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--user-group-color) 34%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--user-group-color) 5%, #111118);
+  box-shadow:
+    inset 3px 0 0 color-mix(in srgb, var(--user-group-color) 72%, transparent),
+    0 8px 24px rgba(0,0,0,0.18);
+}
+.grid-region.ungrouped {
+  border-style: dashed;
+  border-color: rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.018);
+  box-shadow: inset 3px 0 0 rgba(106,106,128,0.55);
 }
 .grid-region-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  /* Full-bleed sticky bar: negative margins span #terminals' horizontal padding
-     (10px left / 16px right) so the solid background covers the entire strip and
-     nothing behind shows through above or beside the header while scrolling. */
-  margin: 0 -16px 8px -10px;
-  padding: 12px 18px 8px 12px;
+  margin: 0 -10px 12px;
+  padding: 10px 14px 9px;
   position: sticky;
   top: 0;
   z-index: 5;
-  background: #111118;
+  border-bottom: 1px solid color-mix(in srgb, var(--user-group-color) 34%, transparent);
+  border-radius: 11px 11px 0 0;
+  background: color-mix(in srgb, var(--user-group-color) 13%, #171720);
+  box-shadow: 0 4px 14px rgba(0,0,0,0.22);
+}
+.grid-region.ungrouped .grid-region-header {
+  border-bottom-color: rgba(255,255,255,0.1);
+  background: #17171f;
 }
 .grid-region-dot {
-  width: 9px;
-  height: 9px;
+  width: 10px;
+  height: 10px;
   border-radius: 3px;
   background: var(--user-group-color, #6a6a80);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--user-group-color) 18%, transparent);
   flex-shrink: 0;
 }
 .grid-region.ungrouped .grid-region-dot {
   background: transparent;
   border: 1px dashed #6a6a80;
+  box-shadow: none;
 }
 .grid-region-name {
-  font-size: 12.5px;
-  font-weight: 650;
-  color: #c4c4d8;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #e1e1ef;
+  letter-spacing: -0.01em;
 }
 .grid-region-count {
   font-size: 10.5px;
-  color: #707088;
-  font-weight: 500;
+  color: #a0a0b6;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(0,0,0,0.22);
 }
 .grid-region-chip {
   font-size: 10px;
@@ -6189,7 +6213,7 @@ body.sidebar-session-dragging * {
 }
 .grid-region-cards {
   display: grid;
-  gap: 10px;
+  gap: 12px;
   align-content: start;
   grid-auto-rows: minmax(460px, min(58vh, 620px));
 }
@@ -6259,6 +6283,13 @@ body.sidebar-session-dragging * {
 }
 .grid-region.collapsed {
   margin-bottom: 10px;
+  padding-bottom: 0;
+}
+.grid-region.collapsed .grid-region-header {
+  margin-bottom: 0;
+  border-bottom: 0;
+  border-radius: 11px;
+  box-shadow: none;
 }
 
 /* ===== Flexible grid layout: resize / drag / reset (spec 08) ===== */
