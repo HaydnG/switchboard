@@ -75,7 +75,7 @@
     const sidebarDensityValue = fieldValue('sidebarDensity', 'comfortable');
     const mcpEmulationValue = fieldValue('mcpEmulation', true);
     const restoreSessionsValue = fieldValue('restoreSessionsOnLaunch', true);
-    const attentionHooksValue = fieldValue('attentionHooks', false);
+    const attentionHooksValue = fieldValue('attentionHooks', true);
     const shellProfileValue = fieldValue('shellProfile', 'auto');
     // Notifications (global only) — alert sound on attention + read-only hotkey hint.
     const attentionSoundValue = !!((current.notifications || {}).sound);

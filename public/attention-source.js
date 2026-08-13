@@ -16,6 +16,23 @@
   //   "needs your permission to use {tool}" / "wants to enter plan mode".
   const OSC9_ATTENTION_REGEX = /attention|approval|permission|needs your|wants to enter/i;
   const OSC9_WAITING_REGEX = /waiting for your input/i;
+  const ATTENTION_HOOK_DEFAULT_VERSION = 1;
+
+  function migrateAttentionHookDefaults(settings) {
+    const current = settings && typeof settings === 'object' ? { ...settings } : {};
+    const version = Number(current.attentionHooksDefaultVersion) || 0;
+    if (version >= ATTENTION_HOOK_DEFAULT_VERSION) {
+      return { settings: current, changed: false };
+    }
+    return {
+      settings: {
+        ...current,
+        attentionHooks: true,
+        attentionHooksDefaultVersion: ATTENTION_HOOK_DEFAULT_VERSION,
+      },
+      changed: true,
+    };
+  }
 
   // Human-readable reason for a Notification matcher when the hook omits a message.
   function describeNotification(matcher) {
@@ -101,6 +118,8 @@
   return {
     OSC9_ATTENTION_REGEX,
     OSC9_WAITING_REGEX,
+    ATTENTION_HOOK_DEFAULT_VERSION,
+    migrateAttentionHookDefaults,
     describeNotification,
     classifyHookEvent,
     classifyAttentionSignal,

@@ -654,12 +654,12 @@ function setActivity(sessionId, active) {
 
   const wasActive = sessionBusyState.get(sessionId) || false;
   sessionBusyState.set(sessionId, active);
+  if (wasActive !== active) captureInboxActivityTime(sessionId);
 
   if (wasActive && !active) {
     // Activity ended → response-ready if user isn't looking at this session
     if (sessionId !== activeSessionId) {
       responseReadySessions.add(sessionId);
-      captureInboxActivityTime(sessionId);
       recordTimelineEvent(sessionId, 'response-ready', 'Ready for review', 'Agent stopped producing output while this session was not focused.');
       const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
       if (item) {
@@ -778,7 +778,13 @@ function updateAgentTask(sessionId, task) {
   setActivity(sessionId, true);
   agentTaskTimers.set(sessionId, setTimeout(() => {
     agentTaskTimers.delete(sessionId);
-    if (!shouldEndTaskFallbackActivity(authoritativeBusyState.get(sessionId))) return;
+    const session = sessionMap.get(sessionId) || openSessions.get(sessionId)?.session;
+    const runtime = session?.runtime || 'claude';
+    if (!shouldEndTaskFallbackActivity(authoritativeBusyState.get(sessionId), runtime)) return;
+    if (runtime === 'omp' || runtime === 'pi') {
+      forceAgentIdle(sessionId);
+      return;
+    }
     scheduleAgentTaskClear(sessionId);
     setActivity(sessionId, false);
   }, AGENT_TASK_ACTIVITY_TIMEOUT_MS));
