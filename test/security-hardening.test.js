@@ -218,7 +218,9 @@ test('plan path authorization confines writes to basename inside the plans direc
   fs.mkdirSync(plansEvil);
   fs.writeFileSync(path.join(plansEvil, 'pwn.md'), 'nope');
 
-  const canonicalPlans = fs.realpathSync(plansDir);
+  const canonicalPlans = fs.realpathSync.native
+    ? fs.realpathSync.native(plansDir)
+    : fs.realpathSync(plansDir);
   const confined = authorizePlanPath(path.join(plansEvil, 'pwn.md'), plansDir);
   assert.equal(confined.ok, true);
   assert.equal(path.basename(confined.path), 'pwn.md');
