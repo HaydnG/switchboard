@@ -7,15 +7,14 @@ function renderJsonlText(text) {
     // Escape XML/HTML-like tags so they render as visible text,
     // but preserve markdown code blocks (which may contain HTML examples).
     const escaped = text.replace(/<(\/?[a-zA-Z][a-zA-Z0-9_-]*(?:\s[^>]*)?\/?)\>/g, '&lt;$1&gt;');
-    let html = window.marked.parse(escaped);
-    return html;
+    return sanitizeMarkdownHtml(window.marked.parse(escaped));
   }
   // Fallback if marked isn't loaded
   let html = escapeHtml(text);
   html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre class="jsonl-code-block"><code>$2</code></pre>');
   html = html.replace(/`([^`]+)`/g, '<code class="jsonl-inline-code">$1</code>');
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  return html;
+  return sanitizeMarkdownHtml(html);
 }
 
 function formatDuration(ms) {
@@ -510,9 +509,11 @@ function renderJsonlEntry(entry, toolResultMap) {
       // Render [Image: source: /path] as an inline image if the entire block is just that
       const imgMatch = block.text.trim().match(/^\[Image:\s*source:\s*([^\]]+)\]$/);
       if (imgMatch) {
+        const imagePath = imgMatch[1].trim();
+        if (!isSafeInlineImagePath(imagePath)) continue;
         const imgEl = document.createElement('img');
         imgEl.className = 'jsonl-tool-screenshot jsonl-clickable-img';
-        imgEl.src = 'file://' + imgMatch[1].trim();
+        imgEl.src = 'file://' + imagePath;
         div.appendChild(imgEl);
         continue;
       }

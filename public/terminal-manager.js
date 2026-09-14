@@ -563,7 +563,9 @@ function showSession(sessionId) {
     }
     if (entry && gridCards.has(sessionId)) {
       // Already in grid — just focus it
-      focusGridCard(sessionId);
+      if (typeof isRenameInputActive !== 'function' || !isRenameInputActive()) {
+        focusGridCard(sessionId);
+      }
     } else if (entry) {
       // Session isn't in the grid yet (e.g. opened from the attention inbox while
       // the grid group filter hides it). Rebuild the grid so the card lands in
@@ -579,7 +581,11 @@ function showSession(sessionId) {
         localStorage.setItem('gridGroupFilter', gridGroupFilter);
       }
       showGridView();
-      requestAnimationFrame(() => focusGridCard(sessionId));
+      requestAnimationFrame(() => {
+        if (typeof isRenameInputActive !== 'function' || !isRenameInputActive()) {
+          focusGridCard(sessionId);
+        }
+      });
     }
   } else {
     // Single terminal view
@@ -591,7 +597,9 @@ function showSession(sessionId) {
     if (session) showTerminalHeader(session);
     if (entry) {
       entry.element.classList.add('visible');
-      entry.terminal.focus();
+      if (typeof isRenameInputActive !== 'function' || !isRenameInputActive()) {
+        entry.terminal.focus();
+      }
       fitAndScroll(entry);
     }
   }

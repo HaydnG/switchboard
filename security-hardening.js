@@ -22,6 +22,41 @@ function isPathInside(root, candidate) {
   );
 }
 
+function isMarkdownPath(filePath) {
+  return typeof filePath === 'string' && filePath.toLowerCase().endsWith('.md');
+}
+
+/**
+ * Authorize a markdown file under one or more project roots, with realpath,
+ * traversal, and sensitive-path checks.
+ */
+function authorizeMarkdownPath(filePath, projectRoots) {
+  if (!isMarkdownPath(filePath) || (typeof filePath === 'string' && filePath.includes('\0'))) {
+    return { ok: false, error: PATH_AUTHORIZATION_ERROR, reason: 'not a markdown file' };
+  }
+  const authorization = authorizeProjectPath(filePath, projectRoots);
+  if (!authorization.ok) return authorization;
+  if (!isMarkdownPath(authorization.path)) {
+    return { ok: false, error: PATH_AUTHORIZATION_ERROR, reason: 'not a markdown file' };
+  }
+  return authorization;
+}
+
+/**
+ * Confine plan writes to basename(file) inside the plans directory.
+ * Avoids `startsWith(plansDir)` false positives like `~/.claude/plans-evil`.
+ */
+function authorizePlanPath(filePath, plansDir) {
+  if (typeof filePath !== 'string' || !filePath || filePath.includes('\0')) {
+    return { ok: false, error: PATH_AUTHORIZATION_ERROR, reason: 'invalid path' };
+  }
+  if (typeof plansDir !== 'string' || !plansDir) {
+    return { ok: false, error: PATH_AUTHORIZATION_ERROR, reason: 'no authorized project' };
+  }
+  const confined = path.join(plansDir, path.basename(filePath));
+  return authorizeMarkdownPath(confined, [plansDir]);
+}
+
 function canonicalizeWithExistingAncestor(candidate) {
   let ancestor = candidate;
   const missingSegments = [];
@@ -188,8 +223,11 @@ function logRejectedOperation(log, { source, operation, target, reason }) {
 
 module.exports = {
   PATH_AUTHORIZATION_ERROR,
+  authorizeMarkdownPath,
+  authorizePlanPath,
   authorizeProjectPath,
   buildSafeCommandPrefix,
+  isPathInside,
   isTrustedIpcSender,
   logRejectedOperation,
   parseCommandPrefix,

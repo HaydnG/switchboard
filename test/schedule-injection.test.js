@@ -134,7 +134,22 @@ test('manual schedule runs only accept project .claude/commands schedule files',
   fs.writeFileSync(wrongName, 'notes');
   fs.writeFileSync(outside, 'prompt');
 
-  assert.equal(isAllowedSchedulePath(allowed), true);
-  assert.equal(isAllowedSchedulePath(wrongName), false);
-  assert.equal(isAllowedSchedulePath(outside), false);
+  assert.equal(isAllowedSchedulePath(allowed, [root]), true);
+  assert.equal(isAllowedSchedulePath(wrongName, [root]), false);
+  assert.equal(isAllowedSchedulePath(outside, [root]), false);
+});
+
+test('manual schedule runs reject structurally valid files outside known projects', (t) => {
+  const known = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-known-'));
+  const unknown = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-unknown-'));
+  t.after(() => {
+    fs.rmSync(known, { recursive: true, force: true });
+    fs.rmSync(unknown, { recursive: true, force: true });
+  });
+  const unknownFile = path.join(unknown, '.claude', 'commands', 'schedule-evil.md');
+  fs.mkdirSync(path.dirname(unknownFile), { recursive: true });
+  fs.writeFileSync(unknownFile, 'prompt');
+
+  assert.equal(isAllowedSchedulePath(unknownFile, [known]), false);
+  assert.equal(isAllowedSchedulePath(unknownFile, []), false);
 });
