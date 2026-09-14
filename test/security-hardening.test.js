@@ -6,8 +6,11 @@ const path = require('path');
 
 const {
   PATH_AUTHORIZATION_ERROR,
+  authorizeMarkdownPath,
+  authorizePlanPath,
   authorizeProjectPath,
   buildSafeCommandPrefix,
+  isPathInside,
   isTrustedIpcSender,
   parseCommandPrefix,
 } = require('../security-hardening');
@@ -191,4 +194,56 @@ test('MCP file tools reject paths outside their workspace and log the operation'
   assert.equal(warnings.length, 1);
   assert.equal(warnings[0][0], '[security] rejected operation');
   assert.equal(warnings[0][1].operation, 'openFile');
+});
+
+test('isPathInside rejects sibling directories that share a prefix', (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-prefix-'));
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  const plans = path.join(tempDir, 'plans');
+  const plansEvil = path.join(tempDir, 'plans-evil');
+  fs.mkdirSync(plans);
+  fs.mkdirSync(plansEvil);
+
+  assert.equal(isPathInside(plans, path.join(plans, 'note.md')), true);
+  assert.equal(isPathInside(plans, path.join(plansEvil, 'pwn.md')), false);
+  assert.equal(plansEvil.startsWith(plans), true);
+});
+
+test('plan path authorization confines writes to basename inside the plans directory', (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-plans-'));
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  const plansDir = path.join(tempDir, 'plans');
+  const plansEvil = path.join(tempDir, 'plans-evil');
+  fs.mkdirSync(plansDir);
+  fs.mkdirSync(plansEvil);
+  fs.writeFileSync(path.join(plansEvil, 'pwn.md'), 'nope');
+
+  const canonicalPlans = fs.realpathSync(plansDir);
+  const confined = authorizePlanPath(path.join(plansEvil, 'pwn.md'), plansDir);
+  assert.equal(confined.ok, true);
+  assert.equal(path.basename(confined.path), 'pwn.md');
+  assert.equal(isPathInside(canonicalPlans, confined.path), true);
+
+  const rejected = authorizePlanPath('../secret.md', plansDir);
+  assert.equal(rejected.ok, true);
+  assert.equal(path.basename(rejected.path), 'secret.md');
+  assert.equal(isPathInside(canonicalPlans, rejected.path), true);
+
+  const notMarkdown = authorizePlanPath('notes.txt', plansDir);
+  assert.equal(notMarkdown.ok, false);
+  assert.equal(notMarkdown.reason, 'not a markdown file');
+});
+
+test('markdown path authorization rejects symlink escapes and non-markdown files', (t) => {
+  const { project, outside } = makeTempProjects(t);
+  const outsideFile = path.join(outside, 'secret.md');
+  const link = path.join(project, 'linked.md');
+  fs.writeFileSync(outsideFile, 'secret');
+  fs.symlinkSync(outsideFile, link);
+  fs.writeFileSync(path.join(project, 'notes.txt'), 'nope');
+  fs.writeFileSync(path.join(project, 'CLAUDE.md'), 'ok');
+
+  assert.equal(authorizeMarkdownPath(link, [project]).ok, false);
+  assert.equal(authorizeMarkdownPath(path.join(project, 'notes.txt'), [project]).ok, false);
+  assert.equal(authorizeMarkdownPath(path.join(project, 'CLAUDE.md'), [project]).ok, true);
 });

@@ -137,7 +137,7 @@ If it still won't open, clear the quarantine attribute from a terminal:
 xattr -dr com.apple.quarantine /Applications/Switchboard.app
 ```
 
-> **Auto-updates are disabled on macOS for these builds.** Because the app is unsigned, `electron-updater` can't verify update signatures, so it won't auto-install new versions on macOS. Download newer releases manually and re-run the approval step above. (Signed Windows/Linux builds update normally.)
+> **macOS updates use a manual bundle swap.** These builds are unsigned, so Switchboard cannot hand the download to Apple's Squirrel installer. After an update is downloaded, restarting the app replaces `Switchboard.app` in place, strips quarantine, and relaunches. You may still need Gatekeeper's **Open Anyway** step after a fresh install. Windows and Linux builds auto-update normally.
 
 ## Prerequisites
 
@@ -230,7 +230,7 @@ The app uses `electron-updater` to check for updates from GitHub Releases on lau
 2. A toast notification appears when the update is ready
 3. User can restart immediately or dismiss (installs on next quit)
 
-> **macOS limitation:** auto-updates require a signed app. Since these fork builds are unsigned, `electron-updater` cannot verify the downloaded update and will not install it on macOS — update manually by downloading the latest `.dmg`. Windows and Linux builds auto-update normally.
+> **macOS:** unsigned builds skip Squirrel.Mac and install the downloaded zip with a local bundle swap + relaunch (see `docs/macos-unsigned-update-fix.md`). Windows and Linux keep the standard `electron-updater` install path.
 
 ## Code Signing
 
