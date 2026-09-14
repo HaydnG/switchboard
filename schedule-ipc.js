@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
 const { encodeProjectPath } = require('./encode-project-path');
+const { isPathInside } = require('./security-hardening');
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
@@ -122,22 +123,35 @@ function ensureScheduleCreatorCommand() {
   }
 }
 
-function isAllowedSchedulePath(filePath) {
+function isAllowedSchedulePath(filePath, projectRoots) {
   if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) return false;
   try {
     const resolved = fs.realpathSync(filePath);
-    return (
-      path.basename(resolved).startsWith('schedule-') &&
-      path.extname(resolved) === '.md' &&
-      path.basename(path.dirname(resolved)) === 'commands' &&
-      path.basename(path.dirname(path.dirname(resolved))) === '.claude'
-    );
+    if (
+      !path.basename(resolved).startsWith('schedule-') ||
+      path.extname(resolved) !== '.md' ||
+      path.basename(path.dirname(resolved)) !== 'commands' ||
+      path.basename(path.dirname(path.dirname(resolved))) !== '.claude'
+    ) {
+      return false;
+    }
+    const projectRoot = path.dirname(path.dirname(path.dirname(resolved)));
+    const roots = Array.isArray(projectRoots) ? projectRoots : [];
+    return roots.some((root) => {
+      if (typeof root !== 'string' || !root) return false;
+      try {
+        const canonicalRoot = fs.existsSync(root) ? fs.realpathSync(root) : path.resolve(root);
+        return canonicalRoot === projectRoot || isPathInside(canonicalRoot, projectRoot);
+      } catch {
+        return false;
+      }
+    });
   } catch {
     return false;
   }
 }
 
-function init(log, runCommand, isTrustedMainFrame = () => true) {
+function init(log, runCommand, isTrustedMainFrame = () => true, getProjectRoots = () => []) {
   const {
     parseFrontmatter,
     createScheduleSession,
@@ -225,7 +239,7 @@ function init(log, runCommand, isTrustedMainFrame = () => true) {
       if (!fs.existsSync(filePath)) {
         return { ok: false, error: 'Schedule file no longer exists' };
       }
-      if (!isAllowedSchedulePath(filePath)) {
+      if (!isAllowedSchedulePath(filePath, getProjectRoots())) {
         return { ok: false, error: 'Schedule path is not authorized' };
       }
       const content = fs.readFileSync(filePath, 'utf8');

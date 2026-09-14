@@ -16,11 +16,19 @@ const { withMainProcessUsageCache } = require('./usage-cache');
 const { shouldUseSingleInstanceLock } = require('./main-lifecycle');
 const { buildDiagnosticsReport } = require('./diagnostics-report');
 const {
+  authorizeMarkdownPath,
+  authorizePlanPath,
   authorizeProjectPath,
   buildSafeCommandPrefix,
   isTrustedIpcSender,
   logRejectedOperation,
 } = require('./security-hardening');
+const {
+  ATTENTION_HOOK_MARK,
+  buildAttentionHookUrl,
+  createAttentionHookToken,
+  isAuthorizedAttentionHookRequest,
+} = require('./attention-hook-auth');
 log.transports.file.level = app.isPackaged ? 'info' : 'debug';
 log.transports.console.level = app.isPackaged ? 'info' : 'debug';
 
@@ -110,15 +118,8 @@ const STATS_CACHE_PATH = path.join(CLAUDE_DIR, 'stats-cache.json');
 const MAIN_DOCUMENT_URL = pathToFileURL(path.join(__dirname, 'public', 'index.html')).href;
 const MAX_BUFFER_SIZE = 256 * 1024;
 
-// Stricter allowlist for memory/plan files that should only be under ~/.claude/
-// or active project directories.
-function isAllowedMemoryPath(filePath) {
-  const resolved = path.resolve(filePath);
-  if (resolved.startsWith(CLAUDE_DIR + path.sep) || resolved === CLAUDE_DIR) return true;
-  for (const [, session] of activeSessions) {
-    if (session.projectPath && resolved.startsWith(session.projectPath + path.sep)) return true;
-  }
-  return false;
+function getMemoryAuthorization(filePath) {
+  return authorizeMarkdownPath(filePath, [CLAUDE_DIR, ...getAuthorizedProjectRoots()]);
 }
 
 // Active PTY sessions
@@ -613,13 +614,16 @@ ipcMain.handle('remove-project', (_event, projectPath) => {
 });
 
 // --- IPC: remap-project ---
-ipcMain.handle('remap-project', (_event, oldPath, newPath) => {
+ipcMain.handle('remap-project', (event, oldPath, newPath) => {
+  if (!isTrustedMainFrame(event, 'remap-project')) {
+    return { error: 'operation rejected' };
+  }
   try {
     const stat = fs.statSync(newPath);
     if (!stat.isDirectory()) return { error: 'Path is not a directory' };
 
-    // Find the folder key for the old project path
-    const folder = oldPath.replace(/[/_]/g, '-').replace(/^-/, '-');
+    // Find the folder key for the old project path (must match Claude CLI encoding)
+    const folder = encodeProjectPath(oldPath);
     const folderPath = path.join(PROJECTS_DIR, folder);
     if (!fs.existsSync(folderPath)) return { error: 'No session data found for this project' };
 
@@ -710,7 +714,13 @@ ipcMain.handle('save-file-for-panel', async (event, filePath, content) => {
 });
 
 // ── File Watching (for viewer panels) ────────────────────────────────
-const fileWatchers = new Map(); // filePath → FSWatcher
+const fileWatchers = new Map(); // filePath → { watcher, debounce }
+
+function closeFileWatcher(entry) {
+  if (!entry) return;
+  if (entry.debounce) clearTimeout(entry.debounce);
+  try { entry.watcher.close(); } catch {}
+}
 
 ipcMain.handle('watch-file', (event, filePath) => {
   const authorization = authorizeFilePanelPath(event, 'watch-file', filePath);
@@ -718,17 +728,19 @@ ipcMain.handle('watch-file', (event, filePath) => {
   const resolved = authorization.path;
   if (fileWatchers.has(resolved)) return { ok: true };
   try {
-    let debounce = null;
-    const watcher = fs.watch(resolved, (eventType) => {
+    const entry = { watcher: null, debounce: null };
+    entry.watcher = fs.watch(resolved, (eventType) => {
       if (eventType !== 'change') return;
-      if (debounce) clearTimeout(debounce);
-      debounce = setTimeout(() => {
+      if (entry.debounce) clearTimeout(entry.debounce);
+      entry.debounce = setTimeout(() => {
+        entry.debounce = null;
+        if (fileWatchers.get(resolved) !== entry) return;
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send('file-changed', resolved);
         }
       }, 300);
     });
-    fileWatchers.set(resolved, watcher);
+    fileWatchers.set(resolved, entry);
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err.message };
@@ -739,9 +751,9 @@ ipcMain.handle('unwatch-file', (event, filePath) => {
   const authorization = authorizeFilePanelPath(event, 'unwatch-file', filePath);
   if (!authorization.ok) return { ok: false, error: authorization.error };
   const resolved = authorization.path;
-  const watcher = fileWatchers.get(resolved);
-  if (watcher) {
-    watcher.close();
+  const entry = fileWatchers.get(resolved);
+  if (entry) {
+    closeFileWatcher(entry);
     fileWatchers.delete(resolved);
   }
   return { ok: true };
@@ -821,13 +833,23 @@ ipcMain.handle('read-plan', (_event, filename) => {
 });
 
 // --- IPC: save-plan ---
-ipcMain.handle('save-plan', (_event, filePath, content) => {
+ipcMain.handle('save-plan', (event, filePath, content) => {
   try {
-    const resolved = path.resolve(filePath);
-    if (!resolved.startsWith(PLANS_DIR)) {
-      return { ok: false, error: 'path outside plans directory' };
+    if (!isTrustedMainFrame(event, 'save-plan')) {
+      return { ok: false, error: 'operation rejected' };
     }
-    fs.writeFileSync(resolved, content, 'utf8');
+    fs.mkdirSync(PLANS_DIR, { recursive: true });
+    const authorization = authorizePlanPath(filePath, PLANS_DIR);
+    if (!authorization.ok) {
+      logRejectedOperation(log, {
+        source: 'ipc',
+        operation: 'save-plan',
+        target: filePath,
+        reason: authorization.reason,
+      });
+      return { ok: false, error: authorization.error };
+    }
+    fs.writeFileSync(authorization.path, content, 'utf8');
     return { ok: true };
   } catch (err) {
     console.error('Error saving plan:', err);
@@ -1130,12 +1152,12 @@ ipcMain.handle('get-memories', () => {
 });
 
 // --- IPC: read-memory ---
-ipcMain.handle('read-memory', (_event, filePath) => {
+ipcMain.handle('read-memory', (event, filePath) => {
   try {
-    const resolved = path.resolve(filePath);
-    if (!resolved.endsWith('.md')) return '';
-    if (!isAllowedMemoryPath(resolved)) return '';
-    return fs.readFileSync(resolved, 'utf8');
+    if (!isTrustedMainFrame(event, 'read-memory')) return '';
+    const authorization = getMemoryAuthorization(filePath);
+    if (!authorization.ok) return '';
+    return fs.readFileSync(authorization.path, 'utf8');
   } catch (err) {
     console.error('Error reading memory file:', err);
     return '';
@@ -1143,13 +1165,15 @@ ipcMain.handle('read-memory', (_event, filePath) => {
 });
 
 // --- IPC: save-memory ---
-ipcMain.handle('save-memory', (_event, filePath, content) => {
+ipcMain.handle('save-memory', (event, filePath, content) => {
   try {
-    const resolved = path.resolve(filePath);
-    if (!resolved.endsWith('.md')) return { ok: false, error: 'not a .md file' };
-    if (!isAllowedMemoryPath(resolved)) return { ok: false, error: 'path not allowed' };
-    if (!fs.existsSync(resolved)) return { ok: false, error: 'file does not exist' };
-    fs.writeFileSync(resolved, content, 'utf8');
+    if (!isTrustedMainFrame(event, 'save-memory')) {
+      return { ok: false, error: 'operation rejected' };
+    }
+    const authorization = getMemoryAuthorization(filePath);
+    if (!authorization.ok) return { ok: false, error: 'path not allowed' };
+    if (!fs.existsSync(authorization.path)) return { ok: false, error: 'file does not exist' };
+    fs.writeFileSync(authorization.path, content, 'utf8');
     return { ok: true };
   } catch (err) {
     console.error('Error saving memory file:', err);
@@ -1184,8 +1208,6 @@ ipcMain.handle('delete-setting', (_event, key) => {
 // is the Claude session UUID — exactly Switchboard's realSessionId — so no extra
 // correlation is needed. OSC-9 remains a fallback.
 const CLAUDE_SETTINGS_JSON = path.join(os.homedir(), '.claude', 'settings.json');
-// Sentinel in the hook URL path so we can find & remove only our own handlers.
-const ATTENTION_HOOK_MARK = '/switchboard-attention-hook';
 
 let attentionHookServer = null;
 let attentionHookPort = null;
@@ -1201,11 +1223,22 @@ function attentionHooksEnabled() {
   return global.attentionHooks !== false;
 }
 
+function getOrCreateAttentionHookToken() {
+  const global = getSetting('global') || {};
+  if (typeof global.attentionHookToken === 'string' && global.attentionHookToken.length >= 32) {
+    return global.attentionHookToken;
+  }
+  const token = createAttentionHookToken();
+  setSetting('global', { ...global, attentionHookToken: token });
+  return token;
+}
+
 function startAttentionHookServer() {
   if (attentionHookServer) return;
   const server = http.createServer((req, res) => {
-    if (req.method !== 'POST') {
-      res.writeHead(405);
+    const token = getOrCreateAttentionHookToken();
+    if (!isAuthorizedAttentionHookRequest(req, token)) {
+      res.writeHead(401);
       res.end();
       return;
     }
@@ -1286,7 +1319,7 @@ function stripSwitchboardHooks(settings) {
 
 function writeClaudeAttentionHook(port) {
   if (!port) return;
-  const url = `http://127.0.0.1:${port}${ATTENTION_HOOK_MARK}`;
+  const url = buildAttentionHookUrl(port, getOrCreateAttentionHookToken());
   const settings = stripSwitchboardHooks(readClaudeSettings());
   if (!settings.hooks) settings.hooks = {};
   const addHook = (event, matcher) => {
@@ -1297,7 +1330,7 @@ function writeClaudeAttentionHook(port) {
   addHook('Stop', ''); // agent finished responding (matcher ignored for Stop)
   fs.mkdirSync(path.dirname(CLAUDE_SETTINGS_JSON), { recursive: true });
   fs.writeFileSync(CLAUDE_SETTINGS_JSON, JSON.stringify(settings, null, 2) + '\n');
-  log.info(`[attention-hook] wrote hooks to ${CLAUDE_SETTINGS_JSON} (${url})`);
+  log.info(`[attention-hook] wrote hooks to ${CLAUDE_SETTINGS_JSON} (port ${port})`);
 }
 
 function removeClaudeAttentionHook() {
@@ -1308,8 +1341,11 @@ function removeClaudeAttentionHook() {
 }
 
 // Renderer toggles the setting then calls this to write/remove the ~/.claude hook.
-ipcMain.handle('configure-attention-hook', (_event, enabled) => {
+ipcMain.handle('configure-attention-hook', (event, enabled) => {
   try {
+    if (!isTrustedMainFrame(event, 'configure-attention-hook')) {
+      return { ok: false, error: 'operation rejected' };
+    }
     if (enabled) {
       if (!attentionHookServer) startAttentionHookServer();
       // If the server is still binding, the listen callback will stamp the port.
@@ -2213,8 +2249,11 @@ if (!gotSingleInstanceLock) {
       });
     }
 
-    scheduleIpc.init(log, runScheduleCommand, isTrustedMainFrame);
-    if (!smokeTest) startScheduler(log, runScheduleCommand);
+    scheduleIpc.init(log, runScheduleCommand, isTrustedMainFrame, () => [...getAuthorizedProjectRoots()]);
+    if (!smokeTest) {
+      cleanStaleLockFiles(log);
+      startScheduler(log, runScheduleCommand);
+    }
 
     // Re-index search if FTS table was recreated (e.g. tokenizer config change)
     if (searchFtsRecreated) populateCacheViaWorker();
@@ -2250,8 +2289,8 @@ app.on('before-quit', () => {
   for (const watcher of runtimeWatchers.splice(0)) {
     try { watcher.close(); } catch {}
   }
-  for (const watcher of fileWatchers.values()) {
-    try { watcher.close(); } catch {}
+  for (const entry of fileWatchers.values()) {
+    closeFileWatcher(entry);
   }
   fileWatchers.clear();
 

@@ -21,6 +21,7 @@ const IDE_DIR = path.join(os.homedir(), '.claude', 'ide');
 
 // sessionId → ServerEntry
 const servers = new Map();
+const MCP_DIFF_TIMEOUT_MS = 10 * 60 * 1000;
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -47,6 +48,34 @@ function rpcResult(id, result) {
 
 function rpcError(id, code, message) {
   return JSON.stringify({ jsonrpc: '2.0', id, error: { code, message } });
+}
+
+function settlePendingDiff(pending, result) {
+  if (!pending || pending.settled) return false;
+  pending.settled = true;
+  if (pending.timeout) {
+    clearTimeout(pending.timeout);
+    pending.timeout = null;
+  }
+  pending.resolve(result);
+  return true;
+}
+
+function isProcessAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function shouldDeleteStaleLock(data, isAlive = isProcessAlive) {
+  if (!data || data.ideName !== 'Switchboard') return false;
+  const pid = Number(data.pid);
+  if (!Number.isInteger(pid) || pid <= 0) return true;
+  return !isAlive(pid);
 }
 
 // ── MCP Tool Schemas ─────────────────────────────────────────────────
@@ -213,9 +242,17 @@ async function handleOpenDiff(entry, rpcId, args, log) {
 
   const diffId = crypto.randomUUID();
 
-  // Create a promise that will be resolved when the user acts on the diff
   const diffPromise = new Promise((resolve) => {
-    entry.pendingDiffs.set(diffId, { resolve, rpcId, tabName: tab_name });
+    const pending = { resolve, rpcId, tabName: tab_name, settled: false, timeout: null };
+    pending.timeout = setTimeout(() => {
+      if (entry.pendingDiffs.get(diffId) === pending) {
+        entry.pendingDiffs.delete(diffId);
+      }
+      if (settlePendingDiff(pending, { action: 'reject' })) {
+        log.debug(`[mcp] session=${entry.sessionId} diff ${diffId} timed out`);
+      }
+    }, MCP_DIFF_TIMEOUT_MS);
+    entry.pendingDiffs.set(diffId, pending);
   });
 
   // Send to renderer
@@ -289,7 +326,7 @@ async function handleCloseTab(entry, rpcId, args, log) {
   for (const [diffId, pending] of entry.pendingDiffs) {
     if (pending.tabName === tab_name) {
       entry.pendingDiffs.delete(diffId);
-      pending.resolve({ action: 'accept' });
+      settlePendingDiff(pending, { action: 'accept' });
 
       // Notify renderer to close the tab
       if (entry.mainWindow && !entry.mainWindow.isDestroyed()) {
@@ -308,8 +345,8 @@ async function handleCloseAllDiffTabs(entry, rpcId, log) {
   log.debug(`[mcp] session=${entry.sessionId} closeAllDiffTabs`);
 
   // Resolve all pending diffs as TAB_CLOSED
-  for (const [diffId, pending] of entry.pendingDiffs) {
-    pending.resolve({ action: 'accept' });
+  for (const [, pending] of entry.pendingDiffs) {
+    settlePendingDiff(pending, { action: 'accept' });
   }
   entry.pendingDiffs.clear();
 
@@ -426,9 +463,9 @@ function shutdownMcpServer(sessionId) {
   const entry = servers.get(sessionId);
   if (!entry) return;
 
-  // Resolve all pending diffs
+  // Unresolved diffs must not look like the user accepted them.
   for (const [, pending] of entry.pendingDiffs) {
-    pending.resolve({ action: 'accept' });
+    settlePendingDiff(pending, { action: 'reject' });
   }
   entry.pendingDiffs.clear();
 
@@ -468,7 +505,7 @@ function resolvePendingDiff(sessionId, diffId, action, editedContent) {
   if (!pending) return;
 
   entry.pendingDiffs.delete(diffId);
-  pending.resolve({ action, content: editedContent });
+  settlePendingDiff(pending, { action, content: editedContent });
 }
 
 /**
@@ -495,8 +532,7 @@ function cleanStaleLockFiles(log) {
       const lockPath = path.join(IDE_DIR, file);
       try {
         const data = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
-        if (data.ideName === 'Switchboard' && data.pid === process.pid) {
-          // Our PID but we didn't start it — stale from crash
+        if (shouldDeleteStaleLock(data)) {
           fs.unlinkSync(lockPath);
           if (log) log.info(`[mcp] Cleaned stale lock file: ${file}`);
         }
@@ -516,5 +552,7 @@ module.exports = {
   resolvePendingDiff,
   rekeyMcpServer,
   cleanStaleLockFiles,
+  shouldDeleteStaleLock,
+  settlePendingDiff,
   _handleMessageForTest: handleMessage,
 };

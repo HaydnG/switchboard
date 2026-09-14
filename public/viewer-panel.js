@@ -288,7 +288,7 @@ class ViewerPanel {
     }
 
     if (this.previewMode) {
-      this.previewEl.innerHTML = DOMPurify.sanitize(window.marked.parse(newContent));
+      this.previewEl.innerHTML = sanitizeMarkdownHtml(window.marked.parse(newContent));
     }
   }
 

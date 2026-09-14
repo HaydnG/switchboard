@@ -26,7 +26,12 @@ function readNewSessionSignals(filePath) {
     let parentSessionId = null;
     let hasSnapshots = false;
     for (const line of lines) {
-      const entry = JSON.parse(line);
+      let entry;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        continue;
+      }
       if (entry.type === 'file-history-snapshot') { hasSnapshots = true; continue; }
       if (entry.forkedFrom) forkedFrom = entry.forkedFrom.sessionId;
       if (entry.planContent) planContent = true;
@@ -203,4 +208,5 @@ module.exports = {
   detectSessionTransitions,
   detectTransitionsForRuntime,
   detectPiLikeTransitions,
+  readNewSessionSignals,
 };
