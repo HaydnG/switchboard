@@ -997,6 +997,9 @@ function finalizeSidebar(newSidebar, projects, newSortedOrder, folderMode) {
     childrenOnly: true,
     onBeforeElUpdated(fromEl, toEl) {
       // Skip updating session items that have an active rename input
+      if (fromEl.classList.contains('session-rename-input') || fromEl.classList.contains('group-rename-input')) {
+        return false;
+      }
       if (fromEl.classList.contains('session-item') && fromEl.querySelector('.session-rename-input')) {
         return false;
       }
@@ -1048,7 +1051,8 @@ function finalizeSidebar(newSidebar, projects, newSortedOrder, folderMode) {
   // interacting with an input/textarea (search box, rename input, dialogs, etc.)
   const ae = document.activeElement;
   const isUserTyping = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable || ae.closest('.modal-overlay'));
-  if (activeSessionId && openSessions.has(activeSessionId) && !isUserTyping) {
+  const renaming = typeof isRenameInputActive === 'function' && isRenameInputActive();
+  if (activeSessionId && openSessions.has(activeSessionId) && !isUserTyping && !renaming) {
     openSessions.get(activeSessionId).terminal.focus();
   }
 }
@@ -1509,7 +1513,9 @@ function rebindSidebarEvents(projects) {
     }
 
     const openSessionFromRow = (e) => {
-      if (e?.target?.closest?.('.session-actions, .session-pin, .session-health-chip')) return;
+      if (e?.target?.closest?.('.session-actions, .session-pin, .session-health-chip, .session-summary, .session-rename-input')) return;
+      if (typeof isRenameUiEvent === 'function' && isRenameUiEvent(e?.target)) return;
+      if (e?.detail === 2) return;
       if (e?.shiftKey || e?.metaKey || e?.ctrlKey) {
         e.preventDefault();
         toggleSidebarSelection(session.sessionId);
@@ -1539,10 +1545,7 @@ function rebindSidebarEvents(projects) {
       makeButtonLike(pin, togglePin, pin.title);
     }
 
-    const summaryEl = item.querySelector('.session-summary');
-    if (summaryEl) {
-      summaryEl.ondblclick = (e) => { e.stopPropagation(); startRename(summaryEl, session); };
-    }
+    bindSessionSummaryRename(item.querySelector('.session-summary'), session);
 
     const stopBtn = item.querySelector('.session-stop-btn');
     if (stopBtn) {
@@ -2135,48 +2138,95 @@ function positionPopover(popover, anchorEl) {
   setTimeout(() => document.addEventListener('mousedown', onClickOutside), 0);
 }
 
+function bindSessionSummaryRename(summaryEl, session) {
+  if (!summaryEl) return;
+  // Clicks on the title must not open the session or start a drag — otherwise
+  // the first click of a double-click focuses the terminal and the rename input
+  // immediately blurs.
+  summaryEl.onpointerdown = (e) => e.stopPropagation();
+  summaryEl.onmousedown = (e) => e.stopPropagation();
+  summaryEl.onclick = (e) => e.stopPropagation();
+  summaryEl.ondblclick = (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    startRename(summaryEl, session);
+  };
+}
+
+function restoreSessionSummary(input, session, text) {
+  const newSummary = document.createElement('div');
+  newSummary.className = 'session-summary';
+  if (typeof fillSessionSummaryWithRuntime === 'function') {
+    fillSessionSummaryWithRuntime(newSummary, session, text);
+  } else {
+    newSummary.textContent = text;
+  }
+  bindSessionSummaryRename(newSummary, session);
+  input.replaceWith(newSummary);
+  return newSummary;
+}
+
 function startRename(summaryEl, session) {
   const input = document.createElement('input');
   input.type = 'text';
   input.className = 'session-rename-input';
   input.value = session.name || session.aiTitle || session.summary;
+  input.addEventListener('pointerdown', (e) => e.stopPropagation());
+  input.addEventListener('mousedown', (e) => e.stopPropagation());
+  input.addEventListener('click', (e) => e.stopPropagation());
 
   summaryEl.replaceWith(input);
-  input.focus();
-  input.select();
+  requestAnimationFrame(() => {
+    input.focus();
+    input.select();
+  });
 
-  const save = async () => {
-    const newName = input.value.trim();
-    const fallback = session.aiTitle || session.summary;
-    const nameToSave = (newName && newName !== fallback) ? newName : null;
-    await window.api.renameSession(session.sessionId, nameToSave);
-    session.name = nameToSave;
+  let done = false;
+  const fallback = session.aiTitle || session.summary;
+  const persistName = typeof sessionNameToPersist === 'function'
+    ? sessionNameToPersist
+    : (value, autoTitle) => {
+        const newName = String(value || '').trim();
+        return (newName && newName !== autoTitle) ? newName : null;
+      };
 
-    const newSummary = document.createElement('div');
-    newSummary.className = 'session-summary';
-    newSummary.textContent = nameToSave || fallback;
-    newSummary.addEventListener('dblclick', (e) => {
-      e.stopPropagation();
-      startRename(newSummary, session);
-    });
-    input.replaceWith(newSummary);
+  const finish = async (persist) => {
+    if (done) return;
+    done = true;
+    input.removeEventListener('blur', onBlur);
+    if (persist) {
+      const nameToSave = persistName(input.value, fallback);
+      try {
+        await window.api.renameSession(session.sessionId, nameToSave);
+        session.name = nameToSave;
+      } catch {
+        // Keep the typed label even if persistence fails so the user can retry.
+      }
+    }
+    const display = persist
+      ? (session.name || persistName(input.value, fallback) || fallback)
+      : (session.name || fallback);
+    if (input.isConnected) restoreSessionSummary(input, session, display);
   };
 
-  input.addEventListener('blur', save);
+  const onBlur = () => { finish(true); };
+
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') input.blur();
+    e.stopPropagation();
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      finish(true);
+    }
     if (e.key === 'Escape') {
-      input.removeEventListener('blur', save);
-      const restored = document.createElement('div');
-      restored.className = 'session-summary';
-      restored.textContent = session.name || session.aiTitle || session.summary;
-      restored.addEventListener('dblclick', (ev) => {
-        ev.stopPropagation();
-        startRename(restored, session);
-      });
-      input.replaceWith(restored);
+      e.preventDefault();
+      finish(false);
     }
   });
+  // Attach blur after the double-click's leftover mouse events have settled,
+  // otherwise the input focuses and immediately blurs.
+  setTimeout(() => {
+    if (!done) input.addEventListener('blur', onBlur);
+  }, 0);
 }
 
 // Inline rename for a user group, mirroring session startRename: swap the name
@@ -2236,7 +2286,7 @@ function startGroupRename(nameEl, group) {
 function startSidebarSessionDrag(session, item, e) {
   if (e.button !== 0) return;
   // Don't hijack interactions with the row's controls, pin, chips, or inputs.
-  if (e.target.closest('button, input, .session-actions, .session-pin, .session-health-chip')) return;
+  if (e.target.closest('button, input, .session-actions, .session-pin, .session-health-chip, .session-summary')) return;
   if (item.classList.contains('disabled')) return;
 
   const startX = e.clientX;

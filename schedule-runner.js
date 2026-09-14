@@ -61,18 +61,24 @@ function cronFieldMatches(field, value) {
   return parseInt(field, 10) === value;
 }
 
-/** Check if a 5-field cron expression matches the current time. */
+/** Check if a 5-field cron expression matches the current time.
+ *  Vixie cron: when both day-of-month and day-of-week are constrained
+ *  (neither is `*`), they combine with OR rather than AND.
+ */
 function cronMatches(cronExpr, now) {
   const parts = cronExpr.trim().split(/\s+/);
   if (parts.length !== 5) return false;
   const [minute, hour, dom, month, dow] = parts;
-  return (
-    cronFieldMatches(minute, now.getMinutes()) &&
-    cronFieldMatches(hour, now.getHours()) &&
-    cronFieldMatches(dom, now.getDate()) &&
-    cronFieldMatches(month, now.getMonth() + 1) &&
-    cronFieldMatches(dow, now.getDay())
-  );
+  if (!cronFieldMatches(minute, now.getMinutes())) return false;
+  if (!cronFieldMatches(hour, now.getHours())) return false;
+  if (!cronFieldMatches(month, now.getMonth() + 1)) return false;
+
+  const domUnconstrained = dom === '*';
+  const dowUnconstrained = dow === '*';
+  const domMatch = cronFieldMatches(dom, now.getDate());
+  const dowMatch = cronFieldMatches(dow, now.getDay());
+  if (!domUnconstrained && !dowUnconstrained) return domMatch || dowMatch;
+  return domMatch && dowMatch;
 }
 
 /**

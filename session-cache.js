@@ -14,11 +14,24 @@ const {
 let activeSessions, getMainWindow, log;
 let deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession;
 let deleteSearchFolder, deleteSearchSession, upsertSearchEntries;
-let setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName;
+let setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta;
 let runtimeSessionsDirs = null;
 
 function sessionsDirFor(runtime) {
   return runtimeSessionsDirs?.[runtime.id] ?? runtime.sessionsDir;
+}
+
+// JSONL `/rename` (customTitle) and AI titles must not clobber a Switchboard
+// manual name stored in session_meta. Surface them through the cache aiTitle
+// column instead so display stays `name || aiTitle || summary`.
+function jsonlDisplayTitle(session) {
+  if (!session) return null;
+  return session.customTitle || session.aiTitle || null;
+}
+
+function applyJsonlDisplayTitle(session) {
+  if (session) session.aiTitle = jsonlDisplayTitle(session);
+  return session;
 }
 
 function init(ctx) {
@@ -39,7 +52,6 @@ function init(ctx) {
   getAllCached = ctx.db.getAllCached;
   getSetting = ctx.db.getSetting;
   getMeta = ctx.db.getMeta;
-  setName = ctx.db.setName;
 }
 
 function readFolderFromFilesystem(runtime, folder) {
@@ -74,9 +86,9 @@ function applyFolderRefreshResult(result) {
   }
 
   const searchEntriesToUpsert = [];
-  const namesToSet = [];
   for (const session of sessionsToUpsert) {
-    const name = getMeta(session.sessionId)?.name || session.customTitle || session.aiTitle || '';
+    applyJsonlDisplayTitle(session);
+    const name = getMeta(session.sessionId)?.name || jsonlDisplayTitle(session) || '';
     searchEntriesToUpsert.push({
       id: session.sessionId,
       type: 'session',
@@ -84,13 +96,11 @@ function applyFolderRefreshResult(result) {
       title: (name ? name + ' ' : '') + session.summary,
       body: session.textContent,
     });
-    if (session.customTitle) namesToSet.push({ id: session.sessionId, name: session.customTitle });
   }
 
   if (sessionsToUpsert.length > 0) upsertCachedSessions(sessionsToUpsert);
   for (const entry of searchEntriesToUpsert) deleteSearchSession(entry.id);
   if (searchEntriesToUpsert.length > 0) upsertSearchEntries(searchEntriesToUpsert);
-  for (const { id, name } of namesToSet) setName(id, name);
   for (const sessionId of sessionsToDelete) {
     deleteCachedSession(sessionId);
     deleteSearchSession(sessionId);
@@ -125,7 +135,6 @@ function refreshFolderForRuntime(runtime, folder) {
   const currentIds = new Set();
   const sessionsToUpsert = [];
   const searchEntriesToUpsert = [];
-  const namesToSet = [];
   const sessionsToDelete = [];
 
   for (const file of jsonlFiles) {
@@ -147,13 +156,13 @@ function refreshFolderForRuntime(runtime, folder) {
       continue;
     }
 
+    applyJsonlDisplayTitle(s);
     sessionsToUpsert.push(s);
-    const name = getMeta(s.sessionId)?.name || s.customTitle || s.aiTitle || '';
+    const name = getMeta(s.sessionId)?.name || jsonlDisplayTitle(s) || '';
     searchEntriesToUpsert.push({
       id: s.sessionId, type: 'session', folder: s.folder,
       title: (name ? name + ' ' : '') + s.summary, body: s.textContent,
     });
-    if (s.customTitle) namesToSet.push({ id: s.sessionId, name: s.customTitle });
   }
 
   for (const sessionId of cachedMap.keys()) {
@@ -163,7 +172,6 @@ function refreshFolderForRuntime(runtime, folder) {
   if (sessionsToUpsert.length > 0) upsertCachedSessions(sessionsToUpsert);
   for (const entry of searchEntriesToUpsert) deleteSearchSession(entry.id);
   if (searchEntriesToUpsert.length > 0) upsertSearchEntries(searchEntriesToUpsert);
-  for (const { id, name } of namesToSet) setName(id, name);
   for (const sessionId of sessionsToDelete) {
     deleteCachedSession(sessionId);
     deleteSearchSession(sessionId);
@@ -401,12 +409,10 @@ function populateCacheViaWorker() {
       deleteSearchFolder(folder);
       if (sessions.length > 0) {
         sessionCount += sessions.length;
+        for (const s of sessions) applyJsonlDisplayTitle(s);
         upsertCachedSessions(sessions);
-        for (const s of sessions) {
-          if (s.customTitle) setName(s.sessionId, s.customTitle);
-        }
         upsertSearchEntries(sessions.map(s => {
-          const name = getMeta(s.sessionId)?.name || s.customTitle || s.aiTitle || '';
+          const name = getMeta(s.sessionId)?.name || jsonlDisplayTitle(s) || '';
           return {
             id: s.sessionId, type: 'session', folder: s.folder,
             title: (name ? name + ' ' : '') + s.summary,
@@ -449,4 +455,6 @@ module.exports = {
   notifyRendererProjectsChanged,
   sendStatus,
   populateCacheViaWorker,
+  jsonlDisplayTitle,
+  applyJsonlDisplayTitle,
 };

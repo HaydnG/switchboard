@@ -1397,7 +1397,9 @@ function focusGridCard(sessionId, { reveal = true } = {}) {
     card.scrollIntoView({ behavior: 'smooth', block: reveal ? 'start' : 'nearest' });
   }
   const entry = openSessions.get(sessionId);
-  if (entry) entry.terminal.focus();
+  if (entry && (typeof isRenameInputActive !== 'function' || !isRenameInputActive())) {
+    entry.terminal.focus();
+  }
   refreshTerminalRendering();
 }
 
