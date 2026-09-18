@@ -85,3 +85,20 @@ test('skip incomplete first line when tailing mid-line', (t) => {
   assert.deepEqual(result.entries, [{ id: 'kept' }]);
   assert.ok(!result.entries.some((entry) => entry.id === 'head'));
 });
+
+test('normalizeJsonlReadOptions clamps oversized and invalid limits', () => {
+  const {
+    DEFAULT_JSONL_MAX_BYTES,
+    DEFAULT_JSONL_MAX_ENTRIES,
+    normalizeJsonlReadOptions,
+  } = require('../jsonl-read');
+
+  assert.deepEqual(normalizeJsonlReadOptions({}), {
+    maxBytes: DEFAULT_JSONL_MAX_BYTES,
+    maxEntries: DEFAULT_JSONL_MAX_ENTRIES,
+  });
+  assert.equal(normalizeJsonlReadOptions({ maxBytes: 1e15 }).maxBytes, DEFAULT_JSONL_MAX_BYTES);
+  assert.equal(normalizeJsonlReadOptions({ maxEntries: 9999 }).maxEntries, DEFAULT_JSONL_MAX_ENTRIES);
+  assert.equal(normalizeJsonlReadOptions({ maxBytes: 512 * 1024 }).maxBytes, 512 * 1024);
+  assert.equal(normalizeJsonlReadOptions({ maxBytes: 0, maxEntries: -1 }).maxBytes, DEFAULT_JSONL_MAX_BYTES);
+});

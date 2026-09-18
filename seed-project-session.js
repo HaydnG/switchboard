@@ -4,7 +4,9 @@ const crypto = require('crypto');
 const { getRuntime, RUNTIMES, DEFAULT_RUNTIME_ID } = require('./agent-runtimes');
 
 function resolveAddProjectRuntimeId(runtimeId) {
-  if (typeof runtimeId === 'string' && RUNTIMES[runtimeId]) return runtimeId;
+  if (typeof runtimeId === 'string' && Object.prototype.hasOwnProperty.call(RUNTIMES, runtimeId)) {
+    return runtimeId;
+  }
   return DEFAULT_RUNTIME_ID;
 }
 

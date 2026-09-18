@@ -2062,7 +2062,7 @@ async function launchNewSession(project, sessionOptions, seedText, groupId) {
   const result = await window.api.openTerminal(sessionId, projectPath, true, sessionOptions || null);
   if (!result.ok) {
     entry.terminal.write(`\r\nError: ${result.error}\r\n`);
-    entry.closed = true;
+    markOpenTerminalClosed(sessionId, entry);
     showSession(sessionId);
     return null;
   }
@@ -2244,6 +2244,15 @@ if (timelineKindFilter) {
 
 // Terminal lifecycle (createTerminalEntry, destroySession, showSession, setupDragAndDrop) → terminal-manager.js
 
+function markOpenTerminalClosed(sessionId, entry) {
+  if (!entry) return;
+  entry.closed = true;
+  if (!entry.exitedAt) entry.exitedAt = Date.now();
+  if (typeof scheduleClosedTerminalReclaim === 'function') {
+    scheduleClosedTerminalReclaim(sessionId);
+  }
+}
+
 async function openSession(session, customOptions) {
   const { sessionId, projectPath } = session;
   clearRecentlyExitedSession(sessionId);
@@ -2277,7 +2286,7 @@ async function openSession(session, customOptions) {
   const result = await window.api.openTerminal(sessionId, projectPath, false, resumeOptions);
   if (!result.ok) {
     entry.terminal.write(`\r\nError: ${result.error}\r\n`);
-    entry.closed = true;
+    markOpenTerminalClosed(sessionId, entry);
     showSession(sessionId);
     return;
   }
@@ -2313,7 +2322,7 @@ async function attachRunningSession(session) {
   const result = await window.api.openTerminal(sessionId, projectPath, false, resumeOptions);
   if (!result || !result.ok) {
     if (result && result.error) entry.terminal.write(`\r\nError: ${result.error}\r\n`);
-    entry.closed = true;
+    markOpenTerminalClosed(sessionId, entry);
     return false;
   }
   if (typeof setSessionMcpActive === 'function') setSessionMcpActive(sessionId, !!result.mcpActive);

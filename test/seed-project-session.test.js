@@ -18,6 +18,7 @@ test('resolveAddProjectRuntimeId accepts claude, pi, and omp and falls back to c
   assert.equal(resolveAddProjectRuntimeId('omp'), 'omp');
   assert.equal(resolveAddProjectRuntimeId('nope'), 'claude');
   assert.equal(resolveAddProjectRuntimeId(undefined), 'claude');
+  assert.equal(resolveAddProjectRuntimeId('__proto__'), 'claude');
 });
 
 test('addProjectRuntimeLabel uses Claude Code for the claude runtime', () => {
