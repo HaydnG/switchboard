@@ -112,7 +112,10 @@ export interface SwitchboardApi {
     sessionOptions?: Record<string, unknown>,
   ) => Promise<{ ok: boolean; error?: string; mcpActive?: boolean }>;
   search: (type: string, query: string, titleOnly?: boolean) => Promise<SearchResult[]>;
-  readSessionJsonl: (sessionId: string) => Promise<{ entries?: unknown[] }>;
+  readSessionJsonl: (
+    sessionId: string,
+    options?: { maxBytes?: number; maxEntries?: number },
+  ) => Promise<{ entries?: unknown[]; truncated?: boolean; totalBytes?: number; error?: string }>;
   getSetting: <T = unknown>(key: string) => Promise<T | null>;
   setSetting: (key: string, value: unknown) => Promise<unknown>;
   deleteSetting: (key: string) => Promise<unknown>;
@@ -137,7 +140,7 @@ export interface SwitchboardApi {
   listScheduleRuns: (scheduleId: string, limit?: number) => Promise<ScheduleRun[]>;
   getShellProfiles: () => Promise<unknown[]>;
   browseFolder: () => Promise<string | null>;
-  addProject: (projectPath: string) => Promise<unknown>;
+  addProject: (projectPath: string, runtimeId?: string) => Promise<unknown>;
   removeProject: (projectPath: string) => Promise<unknown>;
   remapProject: (oldPath: string, newPath: string) => Promise<unknown>;
   openExternal: (url: string) => Promise<unknown>;

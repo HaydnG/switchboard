@@ -21,7 +21,7 @@ contextBridge.exposeInMainWorld('api', {
   archiveSession: (id, archived) => ipcRenderer.invoke('archive-session', id, archived),
   openTerminal: (id, projectPath, isNew, sessionOptions) => ipcRenderer.invoke('open-terminal', id, projectPath, isNew, sessionOptions),
   search: (type, query, titleOnly) => ipcRenderer.invoke('search', type, query, titleOnly),
-  readSessionJsonl: (sessionId) => ipcRenderer.invoke('read-session-jsonl', sessionId),
+  readSessionJsonl: (sessionId, options) => ipcRenderer.invoke('read-session-jsonl', sessionId, options),
 
   // Settings
   getSetting: (key) => ipcRenderer.invoke('get-setting', key),
@@ -44,7 +44,7 @@ contextBridge.exposeInMainWorld('api', {
   getShellProfiles: () => ipcRenderer.invoke('get-shell-profiles'),
 
   browseFolder: () => ipcRenderer.invoke('browse-folder'),
-  addProject: (projectPath) => ipcRenderer.invoke('add-project', projectPath),
+  addProject: (projectPath, runtimeId) => ipcRenderer.invoke('add-project', projectPath, runtimeId),
   removeProject: (projectPath) => ipcRenderer.invoke('remove-project', projectPath),
   remapProject: (oldPath, newPath) => ipcRenderer.invoke('remap-project', oldPath, newPath),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),

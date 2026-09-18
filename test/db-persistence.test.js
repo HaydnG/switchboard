@@ -222,3 +222,14 @@ test('handles punctuation, quotes, duplicate entries, and invalid FTS input', ()
   assert.deepEqual(store.searchByType('session', null), []);
   assert.deepEqual(store.searchByType('session', ''), []);
 });
+
+test('copySessionMeta copies a manual name onto a forked session id', () => {
+  store.setName('fork-old', 'Auth work');
+  assert.equal(store.copySessionMeta('fork-old', 'fork-new'), true);
+  assert.equal(store.getMeta('fork-new').name, 'Auth work');
+
+  store.setName('fork-old', 'Changed later');
+  assert.equal(store.copySessionMeta('fork-old', 'fork-new'), false);
+  assert.equal(store.getMeta('fork-new').name, 'Auth work');
+  assert.equal(store.copySessionMeta('fork-old', 'fork-old'), false);
+});
