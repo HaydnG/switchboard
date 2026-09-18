@@ -40,6 +40,9 @@ test('shouldReclaimClosedTerminal keeps a focused or freshly visible banner', ()
   assert.equal(shouldReclaimClosedTerminal({
     closed: true, focused: false, exitedAt: now, now,
   }), false);
+  assert.equal(shouldReclaimClosedTerminal({
+    closed: true, focused: false, visible: true, exitedAt: 0, now,
+  }), true);
 });
 
 test('pruneSessionMap drops ids that are no longer in the live set', () => {

@@ -14,10 +14,21 @@ function parseJsonlChunk(text, { skipIncompleteFirstLine } = {}) {
   return entries;
 }
 
-function readJsonlFile(filePath, {
-  maxBytes = DEFAULT_JSONL_MAX_BYTES,
-  maxEntries = DEFAULT_JSONL_MAX_ENTRIES,
-} = {}) {
+function normalizeJsonlReadOptions(options = {}) {
+  const maxBytesRaw = Number(options.maxBytes);
+  const maxEntriesRaw = Number(options.maxEntries);
+  return {
+    maxBytes: Number.isFinite(maxBytesRaw) && maxBytesRaw > 0
+      ? Math.min(Math.floor(maxBytesRaw), DEFAULT_JSONL_MAX_BYTES)
+      : DEFAULT_JSONL_MAX_BYTES,
+    maxEntries: Number.isFinite(maxEntriesRaw) && maxEntriesRaw > 0
+      ? Math.min(Math.floor(maxEntriesRaw), DEFAULT_JSONL_MAX_ENTRIES)
+      : DEFAULT_JSONL_MAX_ENTRIES,
+  };
+}
+
+function readJsonlFile(filePath, options) {
+  const { maxBytes, maxEntries } = normalizeJsonlReadOptions(options);
   const totalBytes = fs.statSync(filePath).size;
   let text;
   let tailed = false;
@@ -50,5 +61,6 @@ module.exports = {
   DEFAULT_JSONL_MAX_BYTES,
   DEFAULT_JSONL_MAX_ENTRIES,
   parseJsonlChunk,
+  normalizeJsonlReadOptions,
   readJsonlFile,
 };
