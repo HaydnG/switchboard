@@ -478,6 +478,19 @@ function setName(sessionId, name) {
   runWithBusyRetry(() => stmts.upsertName.run(sessionId, name));
 }
 
+// Forks / compact / resume mint a new session id. Copy the Switchboard-owned
+// name onto the new id when it does not already have one, so JSONL titles
+// cannot replace a name the user already set on the previous id.
+function copySessionMeta(fromId, toId) {
+  if (!fromId || !toId || fromId === toId) return false;
+  const from = stmts.get.get(fromId);
+  if (!from || !from.name) return false;
+  const to = stmts.get.get(toId);
+  if (to && to.name) return false;
+  setName(toId, from.name);
+  return true;
+}
+
 function toggleStar(sessionId) {
   runWithBusyRetry(() => stmts.upsertStar.run(sessionId));
   const row = stmts.get.get(sessionId);
@@ -807,6 +820,7 @@ module.exports = {
   getMeta,
   getAllMeta,
   setName,
+  copySessionMeta,
   toggleStar,
   setArchived,
   isCachePopulated,

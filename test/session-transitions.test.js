@@ -4,7 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { readNewSessionSignals } = require('../session-transitions');
+const { readNewSessionSignals, init, emitSessionForked } = require('../session-transitions');
 
 test('readNewSessionSignals skips malformed JSONL lines instead of aborting', (t) => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-transitions-'));
@@ -27,4 +27,24 @@ test('readNewSessionSignals skips malformed JSONL lines instead of aborting', (t
     parentSessionId: null,
     hasSnapshots: true,
   });
+});
+
+test('emitSessionForked copies session meta before notifying the renderer', () => {
+  const copied = [];
+  const sent = [];
+  init({
+    activeSessions: new Map(),
+    getMainWindow: () => ({
+      isDestroyed: () => false,
+      webContents: { send(...args) { sent.push(args); } },
+    }),
+    log: console,
+    rekeyMcpServer() {},
+    copySessionMeta(fromId, toId) { copied.push([fromId, toId]); },
+  });
+
+  emitSessionForked('old-id', 'new-id');
+
+  assert.deepEqual(copied, [['old-id', 'new-id']]);
+  assert.deepEqual(sent, [['session-forked', 'old-id', 'new-id']]);
 });

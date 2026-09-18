@@ -87,3 +87,22 @@ test('applyFolderRefreshResult does not overwrite a manual session name', () => 
   assert.deepEqual(namesSet, []);
   assert.equal(upserted[0].aiTitle, 'JSONL rename');
 });
+
+test('applyFolderRefreshResult keeps a remembered project path when no jsonl cwd exists', () => {
+  const folderMeta = new Map([['proj', { folder: 'proj', projectPath: '/tmp/app' }]]);
+  initCacheDb({
+    getAllFolderMeta() { return folderMeta; },
+    setFolderMeta(folder, projectPath, indexMtimeMs) {
+      folderMeta.set(folder, { folder, projectPath, indexMtimeMs });
+    },
+  });
+
+  sessionCache.applyFolderRefreshResult({
+    folder: 'proj',
+    projectPath: null,
+    indexMtimeMs: 2,
+  });
+
+  assert.equal(folderMeta.get('proj').projectPath, '/tmp/app');
+  assert.equal(folderMeta.get('proj').indexMtimeMs, 2);
+});

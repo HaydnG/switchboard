@@ -1244,6 +1244,7 @@ window.api.onProcessExited((sessionId, exitCode) => {
   const session = sessionMap.get(sessionId);
   if (entry) {
     entry.closed = true;
+    entry.exitedAt = Date.now();
     keepRecentlyExitedSessionVisible(sessionId);
     recordTimelineEvent(sessionId, 'exited', 'Process exited', `Exit code ${exitCode}.`);
     // Write a visible exit banner so the user can see when the process ended
@@ -1253,7 +1254,7 @@ window.api.onProcessExited((sessionId, exitCode) => {
     try {
       const colour = exitCode === 0 ? '\x1b[2m' : '\x1b[33m';
       entry.terminal.write(
-        `\r\n${colour}── session exited (code ${exitCode}) — re-click this session in the sidebar to relaunch, or click another to dismiss ──\x1b[0m\r\n`
+        `\r\n${colour}── session exited (code ${exitCode}) — re-click this session in the sidebar to relaunch ──\x1b[0m\r\n`
       );
     } catch {}
   }
@@ -1282,13 +1283,16 @@ window.api.onProcessExited((sessionId, exitCode) => {
     return;
   }
 
-  // Claude sessions: keep the terminal mounted with the exit banner visible so
-  // the user can read what happened. Cleanup is deferred — openSession destroys
-  // the closed entry when the user re-clicks the session (existing behavior).
-  // If the session was pending (no .jsonl was written), leave the sidebar
-  // entry in place too so the user has somewhere to relaunch from; it'll be
-  // tidied up by the regular pending-reconciliation pass once it's clear no
-  // real session file is coming.
+  // Agent sessions: keep the terminal mounted with the exit banner visible so
+  // the user can read what happened. Reclaim is scheduled after a short grace
+  // period (or sooner once the card is unfocused / off-screen). If the session
+  // was pending (no .jsonl was written), leave the sidebar entry in place too
+  // so the user has somewhere to relaunch from; it'll be tidied up by the
+  // regular pending-reconciliation pass once it's clear no real session file
+  // is coming.
+  if (typeof scheduleClosedTerminalReclaim === 'function') {
+    scheduleClosedTerminalReclaim(sessionId);
+  }
 
   if (gridViewActive) {
     gridViewerCount.textContent = gridCards.size + ' session' + (gridCards.size !== 1 ? 's' : '');
@@ -1850,11 +1854,82 @@ function dedup(projects) {
     for (let i = 0; i < p.sessions.length; i++) {
       const s = p.sessions[i];
       if (sessionMap.has(s.sessionId)) {
-        Object.assign(sessionMap.get(s.sessionId), s);
-        p.sessions[i] = sessionMap.get(s.sessionId);
+        const existing = sessionMap.get(s.sessionId);
+        const preservedName = typeof preserveManualSessionName === 'function'
+          ? preserveManualSessionName(existing.name, s.name)
+          : (s.name || existing.name || null);
+        Object.assign(existing, s);
+        existing.name = preservedName;
+        p.sessions[i] = existing;
       } else {
         sessionMap.set(s.sessionId, s);
       }
+    }
+  }
+}
+
+function sessionRuntimeStores() {
+  return [
+    lastActivityTime,
+    inboxArrivalTime,
+    lastViewedTime,
+    filesTouchedSinceViewed,
+    attentionReason,
+    sessionBusyState,
+    agentTaskBySession,
+    agentTaskTimers,
+    agentTaskClearTimers,
+    completedTaskBySession,
+    authoritativeBusyState,
+    authoritativeBusyTimers,
+    sessionTimelineStore.eventsBySession,
+  ];
+}
+
+function forgetSessionRuntimeState(sessionId) {
+  if (!sessionId) return;
+  const taskTimer = agentTaskTimers.get(sessionId);
+  if (taskTimer) clearTimeout(taskTimer);
+  const taskClearTimer = agentTaskClearTimers.get(sessionId);
+  if (taskClearTimer) clearTimeout(taskClearTimer);
+  clearAuthoritativeBusyTimer(sessionId);
+  forgetKeyedSessionState(sessionId, sessionRuntimeStores());
+  attentionSessions.delete(sessionId);
+  responseReadySessions.delete(sessionId);
+  completedSessions.delete(sessionId);
+  if (typeof forgetFilePanelState === 'function') forgetFilePanelState(sessionId);
+}
+
+function pruneStaleSessionIndexes() {
+  const liveIds = collectLiveSessionIds(
+    [cachedProjects, cachedAllProjects],
+    [
+      ...pendingSessions.keys(),
+      ...openSessions.keys(),
+      ...recentlyExitedSessions.keys(),
+      ...activePtyIds,
+    ],
+  );
+  pruneSessionMap(sessionMap, liveIds);
+  for (const id of [...agentTaskTimers.keys()]) {
+    if (!liveIds.has(id)) {
+      const timer = agentTaskTimers.get(id);
+      if (timer) clearTimeout(timer);
+    }
+  }
+  for (const id of [...agentTaskClearTimers.keys()]) {
+    if (!liveIds.has(id)) {
+      const timer = agentTaskClearTimers.get(id);
+      if (timer) clearTimeout(timer);
+    }
+  }
+  for (const id of [...authoritativeBusyTimers.keys()]) {
+    if (!liveIds.has(id)) clearAuthoritativeBusyTimer(id);
+  }
+  pruneKeyedSessionStores(liveIds, sessionRuntimeStores());
+  for (const store of [attentionSessions, responseReadySessions, completedSessions]) {
+    for (const id of [...store]) {
+      if (!liveIds.has(id)) store.delete(id);
     }
   }
 }
@@ -1866,12 +1941,11 @@ async function loadProjects({ resort = false } = {}) {
     loadingStatus.className = 'active';
     loadingStatus.style.display = '';
   }
-  const [defaultProjects, allProjects] = await Promise.all([
-    window.api.getProjects(false),
-    window.api.getProjects(true),
-  ]);
-  cachedProjects = defaultProjects;
+  const allProjects = await window.api.getProjects(true);
   cachedAllProjects = allProjects;
+  cachedProjects = typeof projectsExcludingArchivedSessions === 'function'
+    ? projectsExcludingArchivedSessions(allProjects)
+    : allProjects;
   loadingStatus.style.display = 'none';
   loadingStatus.className = '';
   dedup(cachedProjects);
@@ -1919,6 +1993,7 @@ async function loadProjects({ resort = false } = {}) {
   } catch {}
 
   await pollActiveSessions();
+  pruneStaleSessionIndexes();
   refreshSidebar({ resort });
   // Reloaded project data can carry new titles (user renames, AI titles, /title)
   // and membership changes; keep the grid view in sync too — otherwise grid cards
@@ -1987,7 +2062,7 @@ async function launchNewSession(project, sessionOptions, seedText, groupId) {
   const result = await window.api.openTerminal(sessionId, projectPath, true, sessionOptions || null);
   if (!result.ok) {
     entry.terminal.write(`\r\nError: ${result.error}\r\n`);
-    entry.closed = true;
+    markOpenTerminalClosed(sessionId, entry);
     showSession(sessionId);
     return null;
   }
@@ -2169,6 +2244,15 @@ if (timelineKindFilter) {
 
 // Terminal lifecycle (createTerminalEntry, destroySession, showSession, setupDragAndDrop) → terminal-manager.js
 
+function markOpenTerminalClosed(sessionId, entry) {
+  if (!entry) return;
+  entry.closed = true;
+  if (!entry.exitedAt) entry.exitedAt = Date.now();
+  if (typeof scheduleClosedTerminalReclaim === 'function') {
+    scheduleClosedTerminalReclaim(sessionId);
+  }
+}
+
 async function openSession(session, customOptions) {
   const { sessionId, projectPath } = session;
   clearRecentlyExitedSession(sessionId);
@@ -2202,7 +2286,7 @@ async function openSession(session, customOptions) {
   const result = await window.api.openTerminal(sessionId, projectPath, false, resumeOptions);
   if (!result.ok) {
     entry.terminal.write(`\r\nError: ${result.error}\r\n`);
-    entry.closed = true;
+    markOpenTerminalClosed(sessionId, entry);
     showSession(sessionId);
     return;
   }
@@ -2238,7 +2322,7 @@ async function attachRunningSession(session) {
   const result = await window.api.openTerminal(sessionId, projectPath, false, resumeOptions);
   if (!result || !result.ok) {
     if (result && result.error) entry.terminal.write(`\r\nError: ${result.error}\r\n`);
-    entry.closed = true;
+    markOpenTerminalClosed(sessionId, entry);
     return false;
   }
   if (typeof setSessionMcpActive === 'function') setSessionMcpActive(sessionId, !!result.mcpActive);

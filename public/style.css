@@ -4332,6 +4332,48 @@ input:focus-visible {
   color: #555;
 }
 
+.add-project-runtime {
+  border: 0;
+  margin: 14px 0 0;
+  padding: 0;
+  min-inline-size: 0;
+}
+
+.add-project-runtime legend {
+  padding: 0;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #888;
+}
+
+.add-project-runtime-options {
+  display: flex;
+  gap: 6px;
+}
+
+.add-project-runtime-option {
+  flex: 1;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: #b0b0c4;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.add-project-runtime-option:hover {
+  background: rgba(255,255,255,0.08);
+  border-color: rgba(255,255,255,0.15);
+}
+
+.add-project-runtime-option.selected {
+  background: rgba(120,130,255,0.15);
+  border-color: rgba(120,130,255,0.4);
+  color: #8088ff;
+}
+
 .add-project-browse-btn {
   background: rgba(255,255,255,0.06);
   border: 1px solid rgba(255,255,255,0.1);

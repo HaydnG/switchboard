@@ -570,6 +570,13 @@ async function showJsonlViewer(session) {
     return;
   }
 
+  if (result.truncated) {
+    const notice = document.createElement('div');
+    notice.className = 'plans-empty';
+    notice.textContent = 'Showing latest messages; full history truncated to save memory.';
+    jsonlViewerBody.appendChild(notice);
+  }
+
   const rawEntries = result.entries || [];
 
   // Merge consecutive local command entries (caveat + bash-input + stdout/stderr)
@@ -596,7 +603,7 @@ async function showJsonlViewer(session) {
     }
   }
 
-  if (rendered === 0) {
+  if (rendered === 0 && !result.truncated) {
     jsonlViewerBody.innerHTML = '<div class="plans-empty">No messages found in this session.</div>';
   }
 
