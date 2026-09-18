@@ -69,7 +69,10 @@ async function showHandoffPrompt(session) {
 
 async function readLatestHandoffPacket(session) {
   try {
-    const result = await window.api.readSessionJsonl(session.sessionId);
+    const result = await window.api.readSessionJsonl(session.sessionId, {
+      maxBytes: 512 * 1024,
+      maxEntries: 80,
+    });
     if (result && Array.isArray(result.entries)) {
       const text = extractLatestAssistantText(result.entries);
       if (text) return text;
@@ -980,17 +983,34 @@ function showAddProjectDialog() {
   const dialog = document.createElement('div');
   dialog.className = 'add-project-dialog';
 
+  const runtimes = typeof getLaunchableAgentRuntimes === 'function'
+    ? getLaunchableAgentRuntimes()
+    : [
+        { id: 'claude', label: 'Claude' },
+        { id: 'pi', label: 'Pi' },
+        { id: 'omp', label: 'omp' },
+      ];
+  const runtimeButtons = runtimes.map((runtime) => {
+    const selected = runtime.id === 'claude';
+    const label = runtime.id === 'claude' ? 'Claude Code' : runtime.label;
+    return `<button type="button" class="add-project-runtime-option${selected ? ' selected' : ''}" role="radio" aria-checked="${selected ? 'true' : 'false'}" data-runtime="${escapeHtml(runtime.id)}">${escapeHtml(label)}</button>`;
+  }).join('');
+
   dialog.innerHTML = `
     <h3>Add Project</h3>
-    <div class="add-project-hint">Select a folder to create a new project. To start a session in an existing project, use the + on its project header.</div>
+    <div class="add-project-hint">Select a folder and which agent to start. A new session opens immediately in that folder.</div>
     <div class="folder-input-row">
       <input type="text" id="add-project-path" placeholder="/path/to/project" autocomplete="off" spellcheck="false">
-      <button class="add-project-browse-btn">Browse</button>
+      <button type="button" class="add-project-browse-btn">Browse</button>
     </div>
+    <fieldset class="add-project-runtime">
+      <legend>Agent</legend>
+      <div class="add-project-runtime-options" role="radiogroup" aria-label="Agent">${runtimeButtons}</div>
+    </fieldset>
     <div class="add-project-error" id="add-project-error"></div>
     <div class="add-project-actions">
-      <button class="add-project-cancel-btn">Cancel</button>
-      <button class="add-project-add-btn">Add</button>
+      <button type="button" class="add-project-cancel-btn">Cancel</button>
+      <button type="button" class="add-project-add-btn">Add &amp; Start</button>
     </div>
   `;
 
@@ -1006,7 +1026,13 @@ function showAddProjectDialog() {
     document.removeEventListener('keydown', onKey);
   }
 
+  function selectedRuntimeId() {
+    return dialog.querySelector('.add-project-runtime-option.selected')?.dataset.runtime || 'claude';
+  }
+
+  let adding = false;
   async function addProject() {
+    if (adding) return;
     const projectPath = pathInput.value.trim();
     if (!projectPath) {
       errorEl.textContent = 'Please enter a folder path.';
@@ -1014,16 +1040,36 @@ function showAddProjectDialog() {
       return;
     }
     errorEl.style.display = 'none';
-    const result = await window.api.addProject(projectPath);
+    adding = true;
+    const runtimeId = selectedRuntimeId();
+    const addBtn = dialog.querySelector('.add-project-add-btn');
+    if (addBtn) addBtn.disabled = true;
+    const result = await window.api.addProject(projectPath, runtimeId);
     if (result.error) {
+      adding = false;
+      if (addBtn) addBtn.disabled = false;
       errorEl.textContent = result.error;
       errorEl.style.display = 'block';
       return;
     }
     close();
 
-    await loadProjects();
+    const project = { projectPath, folder: result.folder };
+    const options = typeof resolveLaunchOptions === 'function'
+      ? await resolveLaunchOptions(runtimeId, project)
+      : { runtime: runtimeId };
+    await launchNewSession(project, options);
   }
+
+  dialog.querySelector('.add-project-runtime-options').addEventListener('click', (e) => {
+    const btn = e.target.closest('.add-project-runtime-option');
+    if (!btn) return;
+    dialog.querySelectorAll('.add-project-runtime-option').forEach((el) => {
+      const isSelected = el === btn;
+      el.classList.toggle('selected', isSelected);
+      el.setAttribute('aria-checked', isSelected ? 'true' : 'false');
+    });
+  });
 
   dialog.querySelector('.add-project-browse-btn').onclick = async () => {
     const folder = await window.api.browseFolder();

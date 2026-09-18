@@ -56,6 +56,8 @@ const {
   getRuntimeUiCatalog,
   resolveRuntimeId,
 } = require('./agent-runtimes');
+const { ensureProjectSessionFolder } = require('./seed-project-session');
+const { readJsonlFile } = require('./jsonl-read');
 
 
 
@@ -97,7 +99,7 @@ if (app.isPackaged || process.env.FORCE_UPDATER) {
   });
 }
 const {
-  getMeta, getAllMeta, toggleStar, setName, setArchived,
+  getMeta, getAllMeta, toggleStar, setName, copySessionMeta, setArchived,
   isCachePopulated, getAllCached, getCachedByFolder, getCachedFolder, getCachedSession, upsertCachedSessions,
   deleteCachedSession, deleteCachedFolder,
   getFolderMeta, getAllFolderMeta, setFolderMeta,
@@ -551,7 +553,7 @@ ipcMain.handle('browse-folder', async () => {
 });
 
 // --- IPC: add-project ---
-ipcMain.handle('add-project', (_event, projectPath) => {
+ipcMain.handle('add-project', (_event, projectPath, runtimeId) => {
   try {
     // Validate the path exists and is a directory
     const stat = fs.statSync(projectPath);
@@ -564,27 +566,15 @@ ipcMain.handle('add-project', (_event, projectPath) => {
       setSetting('global', global);
     }
 
-    // Create the corresponding folder in ~/.claude/projects/ so it persists
-    const folder = encodeProjectPath(projectPath);
-    const folderPath = path.join(PROJECTS_DIR, folder);
-    if (!fs.existsSync(folderPath)) {
-      fs.mkdirSync(folderPath, { recursive: true });
-    }
-
-    // Seed a minimal .jsonl so deriveProjectPath can read the cwd
-    if (!fs.readdirSync(folderPath).some(f => f.endsWith('.jsonl'))) {
-      const seedId = require('crypto').randomUUID();
-      const seedFile = path.join(folderPath, seedId + '.jsonl');
-      const now = new Date().toISOString();
-      const line = JSON.stringify({ type: 'user', cwd: projectPath, sessionId: seedId, uuid: require('crypto').randomUUID(), timestamp: now, message: { role: 'user', content: 'New project' } });
-      fs.writeFileSync(seedFile, line + '\n');
-    }
-
-    // Immediately index the new folder so it's in cache before frontend renders
-    refreshFolder(folder);
+    const seeded = ensureProjectSessionFolder(projectPath, runtimeId, { seed: false });
+    const runtime = getRuntime(seeded.runtimeId);
+    // First-time Pi/omp users may not have a sessions dir yet, so the boot-time
+    // watcher never started. Start it now that the folder exists.
+    startRuntimeWatcher(runtime);
+    setFolderMeta(seeded.folder, projectPath, Date.now());
     notifyRendererProjectsChanged();
 
-    return { ok: true, folder, projectPath };
+    return { ok: true, folder: seeded.folder, projectPath, runtime: seeded.runtimeId };
   } catch (err) {
     return { error: err.message };
   }
@@ -1554,7 +1544,7 @@ ipcMain.handle('rename-session', (event, sessionId, name) => {
 ipcMain.handle('get-agent-runtimes', () => getRuntimeUiCatalog());
 
 // --- IPC: archive-session ---
-ipcMain.handle('read-session-jsonl', (event, sessionId) => {
+ipcMain.handle('read-session-jsonl', (event, sessionId, options) => {
   if (!isTrustedMainFrame(event, 'read-session-jsonl')) {
     return { error: 'operation rejected' };
   }
@@ -1569,13 +1559,8 @@ ipcMain.handle('read-session-jsonl', (event, sessionId) => {
   );
   if (!jsonlPath) return { error: 'Session file not found' };
   try {
-    const content = fs.readFileSync(jsonlPath, 'utf-8');
-    const entries = [];
-    for (const line of content.split('\n')) {
-      if (!line.trim()) continue;
-      try { entries.push(JSON.parse(line)); } catch {}
-    }
-    return { entries };
+    const { entries, truncated, totalBytes } = readJsonlFile(jsonlPath, options || {});
+    return { entries, truncated, totalBytes };
   } catch (err) {
     return { error: err.message };
   }
@@ -1955,7 +1940,7 @@ ipcMain.on('close-terminal', (event, sessionId) => {
 
 // Session transitions → session-transitions.js
 const sessionTransitions = require('./session-transitions');
-sessionTransitions.init({ activeSessions, getMainWindow: () => mainWindow, log, rekeyMcpServer });
+sessionTransitions.init({ activeSessions, getMainWindow: () => mainWindow, log, rekeyMcpServer, copySessionMeta });
 const { detectTransitionsForRuntime } = sessionTransitions;
 
 // --- fs.watch on agent session directories ---
@@ -1983,7 +1968,10 @@ function refreshFolderInWorker(runtime, folder) {
   });
 }
 
+const startedRuntimeWatchers = new Set();
+
 function startRuntimeWatcher(runtime) {
+  if (!runtime?.id || startedRuntimeWatchers.has(runtime.id)) return;
   if (!runtime.sessionsDir || !fs.existsSync(runtime.sessionsDir)) return;
 
   const pendingFolders = new Set();
@@ -2037,6 +2025,7 @@ function startRuntimeWatcher(runtime) {
       console.error(`[${runtime.id}] projects watcher error:`, err);
     });
     runtimeWatchers.push(watcher);
+    startedRuntimeWatchers.add(runtime.id);
   } catch (err) {
     console.error(`Failed to start ${runtime.id} projects watcher:`, err);
   }
