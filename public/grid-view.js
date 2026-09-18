@@ -106,7 +106,6 @@ function getGridRuntimeState() {
 function getGridOpenSessions() {
   const sessions = [];
   for (const [sid, entry] of openSessions) {
-    if (entry.closed) continue;
     const session = sessionMap.get(sid) || entry.session;
     if (session) sessions.push(session);
   }
@@ -1371,6 +1370,7 @@ function unwrapGridCards() {
 function focusGridCard(sessionId, { reveal = true } = {}) {
   gridFocusedSessionId = sessionId;
   setActiveSession(sessionId);
+  if (typeof reclaimClosedTerminals === 'function') reclaimClosedTerminals();
   clearNotifications(sessionId);
   // Update sidebar active highlight
   document.querySelectorAll('.session-item.active').forEach((el) => el.classList.remove('active'));
@@ -1407,8 +1407,8 @@ function focusGridCard(sessionId, { reveal = true } = {}) {
 // Mirrors the selection showGridView() performs.
 function gridDesiredSids() {
   const openSet = new Set();
-  for (const [sid, entry] of openSessions) {
-    if (!entry.closed) openSet.add(sid);
+  for (const [sid] of openSessions) {
+    openSet.add(sid);
   }
   const allowedSet = getGridAllowedSessionIds();
   const ids = [];
@@ -1629,10 +1629,10 @@ function showGridView() {
   // Switch #terminals to grid layout
   terminalsEl.classList.add('grid-layout');
 
-  // Collect open (non-closed) session IDs
+  // Collect mounted session IDs, including exited cards still in their grace period.
   const openSet = new Set();
-  for (const [sid, entry] of openSessions) {
-    if (!entry.closed) openSet.add(sid);
+  for (const [sid] of openSessions) {
+    openSet.add(sid);
   }
   let allowedSet = getGridAllowedSessionIds();
   if (gridStatusFilter !== 'all' && allowedSet.size === 0) {

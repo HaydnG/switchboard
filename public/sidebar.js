@@ -2185,10 +2185,7 @@ function startRename(summaryEl, session) {
   const fallback = session.aiTitle || session.summary;
   const persistName = typeof sessionNameToPersist === 'function'
     ? sessionNameToPersist
-    : (value, autoTitle) => {
-        const newName = String(value || '').trim();
-        return (newName && newName !== autoTitle) ? newName : null;
-      };
+    : (value) => String(value || '').trim() || null;
 
   const finish = async (persist) => {
     if (done) return;

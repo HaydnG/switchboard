@@ -116,31 +116,47 @@ function setupTerminalKeyBindings(terminal, container, getSessionId, { onFind } 
   }
 }
 
-// Check whether a terminal is scrolled to the bottom using xterm's buffer API.
-function isAtBottom(terminal) {
+function captureScroll(terminal) {
+  if (typeof captureTerminalScroll === 'function') return captureTerminalScroll(terminal);
   const buf = terminal.buffer.active;
-  return buf.viewportY >= buf.baseY;
+  return { wasAtBottom: buf.viewportY >= buf.baseY, viewportY: buf.viewportY };
 }
 
-// Fit terminal to container, subtracting 1 row to avoid partial-row clipping.
-function safeFit(entry) {
-  const dims = entry.fitAddon.proposeDimensions();
+function restoreScroll(terminal, snapshot) {
+  if (typeof restoreTerminalScroll === 'function') {
+    restoreTerminalScroll(terminal, snapshot);
+    return;
+  }
+  if (!snapshot) return;
+  if (snapshot.wasAtBottom) terminal.scrollToBottom();
+  else terminal.scrollLines(snapshot.viewportY - terminal.buffer.active.viewportY);
+}
+
+// Check whether a terminal is scrolled to the bottom using xterm's buffer API.
+function isAtBottom(terminal) {
+  return captureScroll(terminal).wasAtBottom;
+}
+
+function applyFit(entry, dims) {
+  const snapshot = captureScroll(entry.terminal);
   if (dims && dims.rows > 1) {
     entry.terminal.resize(dims.cols, Math.max(1, dims.rows - 1));
   } else if (dims) {
     entry.fitAddon.fit();
   }
+  restoreScroll(entry.terminal, snapshot);
+}
+
+// Fit terminal to container, subtracting 1 row to avoid partial-row clipping.
+function safeFit(entry) {
+  applyFit(entry, entry.fitAddon.proposeDimensions());
 }
 
 // Fit a terminal that just became visible (from display:none or reparent).
 // Defers to requestAnimationFrame so the container has dimensions.
 function fitAndScroll(entry) {
-  const wasAtBottom = isAtBottom(entry.terminal);
   requestAnimationFrame(() => {
     safeFit(entry);
-    if (wasAtBottom) {
-      entry.terminal.scrollToBottom();
-    }
   });
 }
 
@@ -148,23 +164,12 @@ function fitAndScroll(entry) {
 // resize writes, avoiding repeated layout invalidation when the grid opens.
 function fitAndScrollMany(entries) {
   const uniqueEntries = [...new Set((entries || []).filter(Boolean))];
-  const snapshots = uniqueEntries.map((entry) => ({
-    entry,
-    wasAtBottom: isAtBottom(entry.terminal),
-  }));
   requestAnimationFrame(() => {
-    const measured = snapshots.map((snapshot) => ({
-      ...snapshot,
-      dims: snapshot.entry.fitAddon.proposeDimensions(),
+    const measured = uniqueEntries.map((entry) => ({
+      entry,
+      dims: entry.fitAddon.proposeDimensions(),
     }));
-    for (const { entry, wasAtBottom, dims } of measured) {
-      if (dims && dims.rows > 1) {
-        entry.terminal.resize(dims.cols, Math.max(1, dims.rows - 1));
-      } else if (dims) {
-        entry.fitAddon.fit();
-      }
-      if (wasAtBottom) entry.terminal.scrollToBottom();
-    }
+    for (const { entry, dims } of measured) applyFit(entry, dims);
   });
 }
 
@@ -187,16 +192,10 @@ function flushTerminalBuffer(sessionId) {
   if (!entry) return;
 
   const data = buf.chunks.join('');
-  const wasAtBottom = isAtBottom(entry.terminal);
-  const savedViewportY = entry.terminal.buffer.active.viewportY;
+  const snapshot = captureScroll(entry.terminal);
   entry.terminal.write(data, () => {
     if (sessionId !== activeSessionId) return;
-    if (wasAtBottom) {
-      entry.terminal.scrollToBottom();
-    } else {
-      // Restore scroll position so redraws don't yank the user away
-      entry.terminal.scrollLines(savedViewportY - entry.terminal.buffer.active.viewportY);
-    }
+    restoreScroll(entry.terminal, snapshot);
   });
 }
 
@@ -311,6 +310,7 @@ function ensureTerminalVisibilityObserver() {
         if (visible) entry.lastRenderVisibleAt = performance.now();
       }
       refreshTerminalRendering();
+      reclaimClosedTerminals();
     },
     { rootMargin: '200px 0px', threshold: 0 },
   );
@@ -344,7 +344,7 @@ function createTerminalEntry(session) {
     fontFamily: "'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
     theme: TERMINAL_THEME,
     cursorBlink: false,
-    scrollback: 10000,
+    scrollback: typeof terminalScrollbackLines === 'function' ? terminalScrollbackLines(!!gridViewActive) : 3000,
     convertEol: true,
     allowProposedApi: true,
     linkHandler: {
@@ -477,6 +477,8 @@ function createTerminalEntry(session) {
     closeSearchBar,
     session,
     closed: false,
+    exitedAt: 0,
+    closedReclaimTimer: 0,
     renderVisible: null,
     lastRenderVisibleAt: 0,
     webglAddon: null,
@@ -519,6 +521,50 @@ function createTerminalEntry(session) {
   return entry;
 }
 
+function scheduleClosedTerminalReclaim(sessionId) {
+  const entry = openSessions.get(sessionId);
+  if (!entry || !entry.closed) return;
+  if (!entry.exitedAt) entry.exitedAt = Date.now();
+  clearTimeout(entry.closedReclaimTimer);
+  const delay =
+    entry.renderVisible !== false
+      ? Math.max(0, CLOSED_TERMINAL_GRACE_MS - (Date.now() - entry.exitedAt))
+      : 0;
+  entry.closedReclaimTimer = setTimeout(() => reclaimClosedTerminals(), delay);
+}
+
+let reclaimingClosedTerminals = false;
+
+function reclaimClosedTerminals() {
+  if (reclaimingClosedTerminals) return;
+  if (typeof gridInteracting !== 'undefined' && gridInteracting) return;
+  const now = Date.now();
+  const toDestroy = [];
+  for (const [id, entry] of openSessions) {
+    if (
+      shouldReclaimClosedTerminal({
+        closed: entry.closed,
+        focused: id === activeSessionId,
+        visible: entry.renderVisible !== false,
+        now,
+        exitedAt: entry.exitedAt || 0,
+      })
+    ) {
+      toDestroy.push(id);
+    }
+  }
+  if (toDestroy.length === 0) return;
+  reclaimingClosedTerminals = true;
+  try {
+    for (const id of toDestroy) destroySession(id);
+    if (gridViewActive && (typeof gridInteracting === 'undefined' || !gridInteracting)) {
+      showGridView();
+    }
+  } finally {
+    reclaimingClosedTerminals = false;
+  }
+}
+
 // Clean up a closed session entry (dispose terminal, remove DOM, remove from maps).
 function destroySession(sessionId) {
   const entry = openSessions.get(sessionId);
@@ -527,6 +573,7 @@ function destroySession(sessionId) {
   terminalVisibilityObserver?.unobserve(entry.element);
   entry.element._switchboardTerminalEntry = null;
   clearTimeout(entry.webglRetryTimer);
+  clearTimeout(entry.closedReclaimTimer);
   disposeTerminalWebgl(entry);
   entry.terminal.dispose();
   entry.element.remove();
@@ -536,6 +583,7 @@ function destroySession(sessionId) {
     card.remove();
     gridCards.delete(sessionId);
   }
+  if (typeof forgetSessionRuntimeState === 'function') forgetSessionRuntimeState(sessionId);
 }
 
 // Make a session visible in the current view mode (grid or single).
@@ -549,6 +597,7 @@ function showSession(sessionId) {
   const item = document.querySelector(`[data-session-id="${sessionId}"]`);
   if (item) item.classList.add('active');
   setActiveSession(sessionId);
+  reclaimClosedTerminals();
   clearNotifications(sessionId);
   window.dispatchEvent(
     new CustomEvent('switchboard:active-session', {

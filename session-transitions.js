@@ -3,13 +3,22 @@ const fs = require('fs');
 const { getRuntime, getAgentRuntimes } = require('./agent-runtimes');
 const { readSessionHeader } = require('./agent-runtimes/timestamped-jsonl');
 
-let activeSessions, getMainWindow, log, rekeyMcpServer;
+let activeSessions, getMainWindow, log, rekeyMcpServer, copySessionMeta;
 
 function init(ctx) {
   activeSessions = ctx.activeSessions;
   getMainWindow = ctx.getMainWindow;
   log = ctx.log;
   rekeyMcpServer = ctx.rekeyMcpServer;
+  copySessionMeta = ctx.copySessionMeta;
+}
+
+function emitSessionForked(sessionId, newId) {
+  if (typeof copySessionMeta === 'function') copySessionMeta(sessionId, newId);
+  const mainWindow = getMainWindow();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('session-forked', sessionId, newId);
+  }
 }
 
 function readNewSessionSignals(filePath) {
@@ -137,10 +146,7 @@ function detectClaudeTransitions(runtime, folder) {
         activeSessions.delete(sessionId);
         activeSessions.set(newId, session);
         rekeyMcpServer(sessionId, newId);
-        const mainWindow = getMainWindow();
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('session-forked', sessionId, newId);
-        }
+        emitSessionForked(sessionId, newId);
         break;
       }
     }
@@ -179,10 +185,7 @@ function detectPiLikeTransitions(runtime, folder) {
       delete session._awaitingSessionFile;
       activeSessions.delete(sessionId);
       activeSessions.set(newId, session);
-      const mainWindow = getMainWindow();
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('session-forked', sessionId, newId);
-      }
+      emitSessionForked(sessionId, newId);
       break;
     }
 
@@ -209,4 +212,5 @@ module.exports = {
   detectTransitionsForRuntime,
   detectPiLikeTransitions,
   readNewSessionSignals,
+  emitSessionForked,
 };

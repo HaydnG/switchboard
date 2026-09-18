@@ -150,13 +150,7 @@ function handleClose() {
     if (tab.type === 'diff' && !tab.resolved) {
       window.api.mcpDiffResponse(currentPanelSessionId, tab.diffId, 'reject', null);
     }
-    if (tab.type === 'diff' && tab.editorView) {
-      tab.editorView.destroy();
-      tab.editorView = null;
-    }
-    if (tab.type === 'file') {
-      fpViewerPanel.destroy();
-    }
+    destroyCurrentTab(state);
     state.currentTab = null;
   }
 
@@ -257,6 +251,29 @@ function rekeyFilePanelState(oldId, newId) {
   }
 }
 
+function forgetFilePanelState(sessionId) {
+  const state = filePanelState.get(sessionId);
+  if (!state) return;
+  if (currentPanelSessionId === sessionId) {
+    destroyCurrentTab(state);
+    currentPanelSessionId = null;
+    hidePanel();
+  } else {
+    const tab = state.currentTab;
+    if (tab) {
+      if (tab.type === 'diff' && tab.editorView) {
+        tab.editorView.destroy();
+        tab.editorView = null;
+      }
+      tab.oldContent = null;
+      tab.newContent = null;
+      tab.content = null;
+      state.currentTab = null;
+    }
+  }
+  filePanelState.delete(sessionId);
+}
+
 // ── Tab Operations ──────────────────────────────────────────────────
 
 function openDiffTab(sessionId, diffId, data) {
@@ -320,6 +337,9 @@ function destroyCurrentTab(state) {
   if (tab.type === 'file') {
     fpViewerPanel.destroy();
   }
+  tab.oldContent = null;
+  tab.newContent = null;
+  tab.content = null;
 }
 
 async function openFileInPanel(sessionId, filePath) {

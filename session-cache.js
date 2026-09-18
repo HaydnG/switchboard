@@ -81,7 +81,8 @@ function applyFolderRefreshResult(result) {
     return;
   }
   if (!projectPath) {
-    setFolderMeta(folder, null, indexMtimeMs);
+    const remembered = getAllFolderMeta().get(folder)?.projectPath || null;
+    setFolderMeta(folder, remembered, indexMtimeMs);
     return;
   }
 
@@ -115,7 +116,9 @@ function refreshFolderForRuntime(runtime, folder) {
     return;
   }
 
-  const projectPath = deriveProjectPath(folderPath, folder);
+  const projectPath = deriveProjectPath(folderPath, folder)
+    || getAllFolderMeta().get(folder)?.projectPath
+    || null;
   if (!projectPath) {
     setFolderMeta(folder, null, getFolderIndexMtimeMs(folderPath));
     return;
