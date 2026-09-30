@@ -260,6 +260,23 @@ function buildDailyBarChart(stats) {
   statsViewerBody.appendChild(container);
 }
 
+// A month label is ~20px wide but a column is 16px, so a month that only shows
+// a single week (usually the first, partial one) would run into the next
+// label. Those get dropped.
+const HEATMAP_MIN_LABEL_WEEKS = 2;
+
+function heatmapMonthLabels(weekStarts) {
+  const labels = [];
+  for (let week = 0; week < weekStarts.length; week++) {
+    const month = weekStarts[week].getMonth();
+    const prev = labels[labels.length - 1];
+    if (prev && prev.month === month) continue;
+    if (prev && week - prev.week < HEATMAP_MIN_LABEL_WEEKS) labels.pop();
+    labels.push({ week, month });
+  }
+  return labels;
+}
+
 function buildHeatmap(counts) {
   const container = document.createElement('div');
   container.className = 'heatmap-container';
@@ -276,7 +293,6 @@ function buildHeatmap(counts) {
   const monthLabels = document.createElement('div');
   monthLabels.className = 'heatmap-month-labels';
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  let lastMonth = -1;
   const weekStarts = [];
   const d = new Date(startDate);
   while (d <= endDate) {
@@ -286,19 +302,14 @@ function buildHeatmap(counts) {
     d.setDate(d.getDate() + 1);
   }
 
-  // Calculate month label positions
   const colWidth = 16; // 13px cell + 3px gap
-  for (let w = 0; w < weekStarts.length; w++) {
-    const m = weekStarts[w].getMonth();
-    if (m !== lastMonth) {
-      const label = document.createElement('span');
-      label.className = 'heatmap-month-label';
-      label.textContent = months[m];
-      label.style.position = 'absolute';
-      label.style.left = (w * colWidth) + 'px';
-      monthLabels.appendChild(label);
-      lastMonth = m;
-    }
+  for (const { week, month } of heatmapMonthLabels(weekStarts)) {
+    const label = document.createElement('span');
+    label.className = 'heatmap-month-label';
+    label.textContent = months[month];
+    label.style.position = 'absolute';
+    label.style.left = (week * colWidth) + 'px';
+    monthLabels.appendChild(label);
   }
   monthLabels.style.position = 'relative';
   monthLabels.style.height = '16px';
@@ -456,4 +467,8 @@ function buildStatsSummary(stats, dailyMap) {
   }
 
   statsViewerBody.appendChild(summaryEl);
+}
+
+if (typeof module === 'object' && module.exports) {
+  module.exports = { heatmapMonthLabels };
 }
