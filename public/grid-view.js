@@ -1442,12 +1442,21 @@ function gridNeedsRebuild() {
   return false;
 }
 
+// Stats, plans, memory, settings and the JSONL viewer take over the main area by
+// hiding #terminal-area. showGridView() un-hides it, so a background rebuild
+// would replace whatever the user is reading with the grid. The next status tick
+// after the viewer closes catches the grid up.
+function gridCovered() {
+  return terminalArea.style.display === 'none';
+}
+
 // Refresh the grid in response to a status tick. Never rebuilds mid-gesture;
 // otherwise updates card status/dots/chips in place and only does a full
 // rebuild when the rendered session set or grouping actually changed.
 function refreshGridView() {
   if (!gridViewActive) return;
   if (gridInteracting) return;
+  if (gridCovered()) return;
   if (gridCards.size === 0 || gridNeedsRebuild()) {
     showGridView();
     return;
@@ -1609,7 +1618,7 @@ async function ensureGridActiveSessionsMounted() {
 
   // One batched rebuild after all attaches land (skip if the view closed or a
   // drag/resize started while we were awaiting).
-  if (mounted > 0 && gridViewActive && !gridInteracting) showGridView();
+  if (mounted > 0 && gridViewActive && !gridInteracting && !gridCovered()) showGridView();
   return mounted > 0;
 }
 
