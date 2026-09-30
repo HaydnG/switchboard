@@ -16,6 +16,8 @@
     "build:logic": "esbuild src/renderer/lib/control-dialogs.ts --format=cjs --outfile=public/lib/control-dialogs.js --platform=neutral",
     "electron": "electron .",
     "smoke": "npm run bundle:codemirror && npm run build:logic && npm run build:renderer && node scripts/smoke-electron.js",
+    "screenshots": "npm run bundle:codemirror && npm run build:logic && npm run build:renderer && node scripts/demo/capture.js",
+    "demo:video": "npm run bundle:codemirror && npm run build:logic && npm run build:renderer && node scripts/demo/record.js",
     "build:renderer": "vite build",
     "dev:renderer": "vite build --watch",
     "typecheck": "tsc --noEmit",
