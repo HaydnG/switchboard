@@ -1367,11 +1367,15 @@ function unwrapGridCards() {
   terminalsEl.classList.remove('grid-grouped');
 }
 
-function focusGridCard(sessionId, { reveal = true } = {}) {
+// markSeen:false is for focus the user didn't ask for (the end-of-render
+// fallback). Marking seen there would clear Needs You / Ready on whichever card
+// happened to render first, and under the Needs You filter each clear triggers
+// another render, draining the whole inbox.
+function focusGridCard(sessionId, { reveal = true, markSeen = true } = {}) {
   gridFocusedSessionId = sessionId;
   setActiveSession(sessionId);
   if (typeof reclaimClosedTerminals === 'function') reclaimClosedTerminals();
-  clearNotifications(sessionId);
+  if (markSeen) clearNotifications(sessionId);
   // Update sidebar active highlight
   document.querySelectorAll('.session-item.active').forEach((el) => el.classList.remove('active'));
   const sidebarItem = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
@@ -1738,7 +1742,7 @@ function showGridView() {
   requestAnimationFrame(() => {
     const toFocus =
       activeSessionId && sessionIds.includes(activeSessionId) ? activeSessionId : sessionIds[0];
-    if (toFocus) focusGridCard(toFocus, { reveal: false });
+    if (toFocus) focusGridCard(toFocus, { reveal: false, markSeen: false });
   });
 }
 
