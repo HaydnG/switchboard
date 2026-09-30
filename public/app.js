@@ -2384,6 +2384,7 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
         for (const entry of openSessions.values()) {
           if (!entry.closed) fitAndScroll(entry);
         }
+        refreshGridView();
       } else if (activeSessionId && openSessions.has(activeSessionId)) {
         showSession(activeSessionId);
       } else {
