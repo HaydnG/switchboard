@@ -3097,9 +3097,10 @@ input:focus-visible {
   margin-bottom: 28px;
 }
 
+/* Labels are absolutely positioned, which ignores padding. The margin lines
+   them up with the grid past the 28px day-label column and 4px gap. */
 .heatmap-month-labels {
-  display: flex;
-  padding-left: 32px;
+  margin-left: 32px;
   margin-bottom: 4px;
 }
 
