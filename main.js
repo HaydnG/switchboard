@@ -32,7 +32,15 @@ const {
 log.transports.file.level = app.isPackaged ? 'info' : 'debug';
 log.transports.console.level = app.isPackaged ? 'info' : 'debug';
 
-try { require('electron-reloader')(module, { watchRenderer: true }); } catch {};
+// The reloader watches the whole repo. Screenshots, packaged builds, docs, scripts
+// and tests aren't loaded by the app, and reloading on them resets every open
+// terminal (e.g. while `npm run screenshots` writes into build/).
+try {
+  require('electron-reloader')(module, {
+    watchRenderer: true,
+    ignore: ['build', 'dist', 'docs', 'scripts', 'test'],
+  });
+} catch {};
 
 // Clean env for child processes — strip Electron internals that cause nested
 // Electron apps (or node-pty inside them) to malfunction.
