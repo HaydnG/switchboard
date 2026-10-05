@@ -1634,6 +1634,7 @@ function showGridView() {
   // Hide other viewers but keep terminal-area visible
   planViewer.style.display = 'none';
   statsViewer.style.display = 'none';
+  kbViewer.style.display = 'none';
   memoryViewer.style.display = 'none';
   settingsViewer.style.display = 'none';
   jsonlViewer.style.display = 'none';
