@@ -43,6 +43,21 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('list-schedule-runs', scheduleId, limit),
   getShellProfiles: () => ipcRenderer.invoke('get-shell-profiles'),
 
+  // Knowledge bases (second-brain)
+  kbGetOverview: () => ipcRenderer.invoke('kb-get-overview'),
+  kbGetGraph: (force) => ipcRenderer.invoke('kb-get-graph', force),
+  kbReadEntry: (id) => ipcRenderer.invoke('kb-read-entry', id),
+  kbSearch: (options) => ipcRenderer.invoke('kb-search', options),
+  kbReindex: (full) => ipcRenderer.invoke('kb-reindex', full),
+  kbStartDaemon: () => ipcRenderer.invoke('kb-start-daemon'),
+  kbOpenEntry: (id, mode) => ipcRenderer.invoke('kb-open-entry', id, mode),
+  kbExportEval: (payload) => ipcRenderer.invoke('kb-export-eval', payload),
+  onKbGraphProgress: (callback) => {
+    const listener = (_event, progress) => callback(progress);
+    ipcRenderer.on('kb-graph-progress', listener);
+    return () => ipcRenderer.removeListener('kb-graph-progress', listener);
+  },
+
   browseFolder: () => ipcRenderer.invoke('browse-folder'),
   addProject: (projectPath, runtimeId) => ipcRenderer.invoke('add-project', projectPath, runtimeId),
   removeProject: (projectPath) => ipcRenderer.invoke('remove-project', projectPath),
