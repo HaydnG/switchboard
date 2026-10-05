@@ -70,6 +70,7 @@ The full breakdown lives in [docs/fork-features.md](docs/fork-features.md).
 - **Full-Text Search** — Find any session by what was discussed, not just when it happened
 - **IDE Emulation** — Claude's file opens and proposed edits appear in a side panel where you can accept, reject, or edit them. Turn it off in Global Settings if you prefer your own editor (VS Code, Cursor, etc.)
 - **Plans & Memory** — Browse and edit your plan files and CLAUDE.md memory in one place
+- **Knowledge** — Browse, read, graph, and search-evaluate your [second-brain](https://github.com/doordash/second-brain-kb) knowledge bases
 - **Activity Stats** — Heatmap of your coding activity across all projects
 - **Session Names** — Picks up session names from Claude Code's `/rename` command automatically
 
@@ -166,6 +167,23 @@ Switchboard treats your sessions like an agent control room: it shows not just *
 - **Per-session timeline** — A searchable event log (started, busy, needs-you, ready, exited, stopped, forked) separate from raw scrollback.
 - **Safer controls** — App-styled confirmation dialogs for destructive actions, with affected counts and names, and an undo path where supported.
 
+## Knowledge (second-brain)
+
+If you use the [second-brain](https://github.com/doordash/second-brain-kb) plugin, the Knowledge tab shows every knowledge base it indexes: the vault plus any extra roots from `~/.config/second-brain/config.json`.
+
+![Knowledge tab reading a wiki note, with its outgoing links and backlinks](build/screenshot-knowledge-reader.png)
+
+- **File tree** — Every indexed entry, grouped by knowledge base and folder, with a title/path filter. Wiki articles and discovered notes are marked.
+- **Reader** — Rendered notes with frontmatter, clickable `[[wikilinks]]` and relative links, and a connection tree of outgoing links and backlinks you can expand recursively. References that point outside the index are listed separately.
+- **Graph** — An interactive link graph (frontmatter `sources:` / `related:`, wikilinks, markdown links, `Discovered/` citations), either around one entry (1–3 hops) or as a map of the most connected hubs.
+- **Search & eval** — Runs the daemon's hybrid search and then the Jev relevance gate with the same request, threshold, and pool sizes as the prompt hook (12 → 3) or `vault_search` (24 → 8). It shows each candidate's retrieval leg, RRF score, and Jev probability, plus latency against the 1.5 s production budget and the Jev cost. Label candidates ✓ / ✗ to compare search alone against Jev at several thresholds (precision, recall, silence when nothing is relevant), then export the labelled runs in `bench/relevance.ts`'s case format.
+
+![Link graph three hops around one note](build/screenshot-knowledge-graph.png)
+
+![Search & eval comparing search alone against the Jev gate over three labelled runs](build/screenshot-knowledge-search.png)
+
+Switchboard never writes to your notes, and it opens the second-brain config and index read-only. **Reindex** asks the daemon to refresh its own index, and **Start** launches the daemon if it isn't running. Search runs and labels are stored in Switchboard's settings, not in the vault. The first link-graph build reads every note, which can take a minute on Google Drive; later builds reuse a per-file cache in `~/.switchboard/kb-links-cache.json`.
+
 ## Activity Stats & Usage
 
 The Stats tab shows a year-long activity heatmap, your last 30 days of tokens and messages, streaks, per-model token totals, and your live Claude rate limits. The status bar keeps current usage visible everywhere else.
@@ -245,9 +263,12 @@ npm run electron
 
 The screenshots come from a demo with made-up projects, git repos, transcripts, and a scripted stand-in for `claude`, so no real sessions or credentials are shown. The demo runs under its own home directory (`/Users/Shared/demo` on macOS) with isolated app data, fullscreen at your display's native resolution.
 
+The Knowledge shots use a made-up second-brain vault and handbook. The capture script serves a stand-in daemon (search, health, reindex) and a scripted Jev on `127.0.0.1`, so nothing goes to the real Jev service. Building the demo index needs the `sqlite3` CLI, which macOS ships.
+
 ```bash
 npm run screenshots                  # all shots, written to build/
 npm run screenshots -- hero cleanup  # only the named shots
+npm run screenshots -- knowledge knowledge-graph knowledge-search  # just the Knowledge tab
 SB_DEMO_KEEP=1 npm run screenshots -- none  # just launch the demo and leave it running
 npm run demo:video                   # promo video → dist/demo/ (needs ffmpeg; SB_FFMPEG=/path overrides)
 ```

@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const { encodeProjectPath } = require('../../encode-project-path');
 const { groups, projects } = require('./fixtures');
+const { seedKnowledge } = require('./knowledge');
 
 const MINUTE = 60 * 1000;
 const DAY = 24 * 60 * MINUTE;
@@ -258,6 +259,7 @@ function seed(demoHome = DEFAULT_DEMO_HOME) {
     liveSessionIds,
     starred,
     groups: { groups, assignments },
+    knowledge: seedKnowledge(home, now),
   };
   fs.writeFileSync(path.join(demoDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
   return manifest;
