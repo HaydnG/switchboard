@@ -103,7 +103,7 @@ test('classifyEntry maps vault-relative and absolute index paths to roots and la
   };
   assert.deepEqual(classifyEntry('KB/main/wiki/a.md', config), {
     rootId: 'vault',
-    absPath: '/v/KB/main/wiki/a.md',
+    absPath: path.join('/v', 'KB/main/wiki/a.md'),
     relPath: 'KB/main/wiki/a.md',
     layer: 'wiki',
   });

@@ -26,7 +26,15 @@ const DEFAULT_DISCOVERED_DIR = 'KB/main/raw/Discovered';
 const LINK_KINDS = ['source', 'related', 'wikilink', 'link', 'cite'];
 
 function expandHome(p, home) {
-  return (p.startsWith('~/') ? path.join(home, p.slice(2)) : p).replace(/\/+$/, '');
+  return (p.startsWith('~/') ? path.join(home, p.slice(2)) : p).replace(/[\\/]+$/, '');
+}
+
+function isInside(entryPath, dir) {
+  return entryPath.startsWith(dir) && /^[\\/]./.test(entryPath.slice(dir.length));
+}
+
+function toSlashes(p) {
+  return path.sep === '\\' ? p.replace(/\\/g, '/') : p;
 }
 
 function strings(value) {
@@ -161,14 +169,14 @@ function classifyEntry(entryPath, config) {
   let best = null;
   for (const root of config.roots) {
     if (root.isVault) continue;
-    if (entryPath.startsWith(`${root.path}/`) && (!best || root.path.length > best.path.length)) {
+    if (isInside(entryPath, root.path) && (!best || root.path.length > best.path.length)) {
       best = root;
     }
   }
   return {
     rootId: best ? best.id : 'other',
     absPath: entryPath,
-    relPath: best ? entryPath.slice(best.path.length + 1) : entryPath,
+    relPath: best ? toSlashes(entryPath.slice(best.path.length + 1)) : entryPath,
     layer: 'note',
   };
 }
@@ -285,8 +293,8 @@ function createResolver(entries, config, home = os.homedir()) {
   const byPath = new Map();
   const byName = new Map();
   for (const entry of entries) {
-    byPath.set(entry.absPath, entry.id);
-    if (entry.realpath) byPath.set(entry.realpath, entry.id);
+    byPath.set(path.normalize(entry.absPath), entry.id);
+    if (entry.realpath) byPath.set(path.normalize(entry.realpath), entry.id);
     const name = path.basename(entry.absPath, '.md').toLowerCase();
     if (!byName.has(name)) byName.set(name, []);
     byName.get(name).push(entry);
@@ -300,7 +308,7 @@ function createResolver(entries, config, home = os.homedir()) {
     let candidates = byName.get(path.basename(lower)) || [];
     if (lower.includes('/')) {
       candidates = candidates.filter((entry) =>
-        entry.absPath.toLowerCase().endsWith(`/${lower}.md`),
+        toSlashes(entry.absPath).toLowerCase().endsWith(`/${lower}.md`),
       );
     }
     if (candidates.length === 0) return null;
@@ -338,7 +346,7 @@ function createResolver(entries, config, home = os.homedir()) {
         ...ancestors,
       ]);
     }
-    return firstExisting([path.resolve(path.dirname(from.absPath), expanded)]);
+    return firstExisting([path.join(path.dirname(from.absPath), expanded)]);
   }
 
   function bySourceSpec(raw, from) {
@@ -346,7 +354,7 @@ function createResolver(entries, config, home = os.homedir()) {
     const spec = path.extname(raw) ? raw : `${raw}.md`;
     const expanded = spec.startsWith('~/') ? path.join(home, spec.slice(2)) : spec;
     if (path.isAbsolute(expanded)) return firstExisting([expanded]);
-    const candidates = [path.resolve(path.dirname(from.absPath), expanded)];
+    const candidates = [path.join(path.dirname(from.absPath), expanded)];
     if (config.vault) {
       candidates.push(
         path.join(config.vault, path.posix.dirname(config.wikiDir), expanded),
