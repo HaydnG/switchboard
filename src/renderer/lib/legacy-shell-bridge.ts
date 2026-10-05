@@ -53,6 +53,7 @@ export function getLegacySurfaceSnapshot(doc: Document = document): LegacySurfac
     'memory-viewer',
     'settings-viewer',
     'stats-viewer',
+    'kb-viewer',
   ];
   const activePanel =
     panels.find((id) => isVisible(byId(id, doc), doc)) ??

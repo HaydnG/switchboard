@@ -34,6 +34,8 @@ const memoryContent = document.getElementById('memory-content');
 const statsViewer = document.getElementById('stats-viewer');
 const statsViewerBody = document.getElementById('stats-viewer-body');
 const memoryViewer = document.getElementById('memory-viewer');
+const kbContent = document.getElementById('kb-content');
+const kbViewer = document.getElementById('kb-viewer');
 const memoryPanel = new ViewerPanel(memoryViewer, {
   copyPath: true, copyContent: true,
   language: 'markdown', storageKey: 'markdownPreviewMode',
@@ -1361,6 +1363,7 @@ function getWorkspaceView() {
     ['plan-viewer', 'plan'],
     ['memory-viewer', 'memory'],
     ['stats-viewer', 'stats'],
+    ['kb-viewer', 'kb'],
   ];
   for (const [id, view] of viewers) {
     const element = document.getElementById(id);
@@ -2374,6 +2377,7 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
     plansContent.style.display = 'none';
     statsContent.style.display = 'none';
     memoryContent.style.display = 'none';
+    kbContent.style.display = 'none';
     sessionFilters.style.display = 'none';
     searchBar.style.display = 'none';
 
@@ -2416,9 +2420,17 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
       planViewer.style.display = 'none';
       memoryViewer.style.display = 'none';
       settingsViewer.style.display = 'none';
+      kbViewer.style.display = 'none';
       timelineViewer.style.display = 'none';
       statsViewer.style.display = 'flex';
       loadStats();
+    } else if (tabName === 'kb') {
+      kbContent.style.display = 'flex';
+      hideAllViewers();
+      placeholder.style.display = 'none';
+      terminalArea.style.display = 'none';
+      kbViewer.style.display = 'flex';
+      window.dispatchEvent(new CustomEvent('switchboard:kb-activate'));
     } else if (tabName === 'memory') {
       searchBar.style.display = '';
       searchInput.placeholder = 'Search agent files...';

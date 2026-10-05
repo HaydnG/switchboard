@@ -41,6 +41,7 @@
     document.getElementById('terminal-area').style.display = 'none';
     document.getElementById('plan-viewer').style.display = 'none';
     document.getElementById('stats-viewer').style.display = 'none';
+    document.getElementById('kb-viewer').style.display = 'none';
     document.getElementById('memory-viewer').style.display = 'none';
     document.getElementById('jsonl-viewer').style.display = 'none';
     settingsViewer.style.display = 'flex';

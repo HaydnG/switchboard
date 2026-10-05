@@ -1,5 +1,6 @@
 import { createPortal } from 'react-dom';
 import { ControlUiHost } from '@renderer/components/ControlUiHost';
+import { KnowledgeHost } from '@renderer/components/knowledge/KnowledgeHost';
 import { StatusBar } from '@renderer/components/StatusBar';
 import { UpdateToast } from '@renderer/components/UpdateToast';
 import { useUpdater } from '@renderer/hooks/useUpdater';
@@ -22,6 +23,7 @@ export function App() {
         document.body,
       )}
       <ControlUiHost />
+      <KnowledgeHost />{' '}
       {toast && (
         <UpdateToast
           toast={toast}

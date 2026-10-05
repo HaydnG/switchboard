@@ -304,7 +304,7 @@ function createWindow() {
               && !document.getElementById('react-shell-topbar')
               && !document.getElementById('react-shell-inspector'),
             legacySidebarVisible: getComputedStyle(document.getElementById('sidebar')).display !== 'none',
-            legacyIconTabs: document.querySelectorAll('#sidebar-tabs .sidebar-tab').length === 4,
+            legacyIconTabs: document.querySelectorAll('#sidebar-tabs .sidebar-tab').length === 5,
             legacySessionList: !!document.getElementById('sidebar-content')
           })`);
           const ready = Object.values(state).every(Boolean) && smokeErrors.length === 0;
@@ -319,12 +319,25 @@ function createWindow() {
                 const sidebar = document.getElementById('sidebar');
                 return !!sidebar
                   && getComputedStyle(sidebar).display !== 'none'
-                  && document.querySelectorAll('#sidebar-tabs .sidebar-tab').length === 4
+                  && document.querySelectorAll('#sidebar-tabs .sidebar-tab').length === 5
                   && !!document.getElementById('sidebar-content');
               })()`);
               if (!legacySidebarReady) {
                 throw new Error('Legacy sidebar did not render expected navigation and session list');
               }
+            } else if (process.env.SWITCHBOARD_SMOKE_VIEW === 'kb') {
+              await mainWindow.webContents.executeJavaScript(
+                "document.querySelector('.sidebar-tab[data-tab=\"kb\"]')?.click(); void 0",
+              );
+              await new Promise(resolve => setTimeout(resolve, 1500));
+              const kbReady = await mainWindow.webContents.executeJavaScript(`(() => {
+                const viewer = document.getElementById('kb-viewer');
+                return !!viewer
+                  && getComputedStyle(viewer).display !== 'none'
+                  && !!viewer.querySelector('.kb-view')
+                  && !!document.querySelector('#kb-content .kb-sidebar');
+              })()`);
+              if (!kbReady) throw new Error('Knowledge tab did not render its viewer and sidebar');
             }
             if (smokeErrors.length > 0) {
               throw new Error(`Renderer errors: ${smokeErrors.join(' | ')}`);
@@ -2247,6 +2260,7 @@ if (!gotSingleInstanceLock) {
     }
 
     scheduleIpc.init(log, runScheduleCommand, isTrustedMainFrame, () => [...getAuthorizedProjectRoots()]);
+    require('./kb-ipc').init({ log, isTrustedMainFrame, getMainWindow: () => mainWindow });
     if (!smokeTest) {
       cleanStaleLockFiles(log);
       startScheduler(log, runScheduleCommand);
