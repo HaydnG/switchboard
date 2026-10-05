@@ -11,6 +11,7 @@ const path = require('path');
 const { seed } = require('./seed');
 const { launch } = require('./launch');
 const { connect } = require('./cdp');
+const { startKnowledgeServices } = require('./knowledge');
 
 const DEMO_HOME = process.env.SB_DEMO_HOME || undefined;
 const OUT_DIR = process.env.SB_DEMO_OUT || path.resolve(__dirname, '..', '..', 'build');
@@ -153,8 +154,78 @@ function shots(manifest) {
         await wait(300);`,
       cleanup: `click('#sidebar-tabs .sidebar-tab[data-tab="sessions"]');`,
     },
+    knowledge: {
+      file: 'screenshot-knowledge-reader.png',
+      prepare: `
+        ${KB_HELPERS}
+        await openKnowledge();
+        await openEntry('Wiki/checkout/checkout-flow.md', 'checkout flow');
+        for (let i = 0; i < 40 && !$('.kb-markdown'); i++) await wait(100);
+        $('.kb-reader-side .kb-conn-toggle:not(:disabled)')?.click();
+        await wait(300);`,
+    },
+    'knowledge-graph': {
+      file: 'screenshot-knowledge-graph.png',
+      prepare: `
+        ${KB_HELPERS}
+        await openKnowledge();
+        await openEntry('Wiki/payments/refund-idempotency.md', 'refund idempotency');
+        for (let i = 0; i < 40 && !$('.kb-markdown'); i++) await wait(100);
+        [...document.querySelectorAll('.kb-reader .kb-actions .btn')].find(b => b.textContent === 'Show in graph').click();
+        await wait(300);
+        setValue($('.kb-graph-toolbar select'), '3');
+        await wait(600);`,
+    },
+    'knowledge-search': {
+      file: 'screenshot-knowledge-search.png',
+      prepare: `
+        ${KB_HELPERS}
+        await openKnowledge();
+        tab('Search & eval');
+        await wait(200);
+        for (const { query, relevant } of ${JSON.stringify(manifest.knowledge.queries)}) {
+          setValue($('.kb-search-bar input[type=search]'), query);
+          await wait(100);
+          $('.kb-search-bar button[type=submit]').click();
+          for (let i = 0; i < 80 && $('.kb-run-head h3')?.textContent !== '“' + query + '”'; i++) await wait(100);
+          for (const row of document.querySelectorAll('.kb-candidates tbody tr')) {
+            const id = row.querySelector('.kb-candidate-title [title]')?.getAttribute('title');
+            row.querySelector(relevant.includes(id) ? '[aria-label="Relevant"]' : '[aria-label="Not relevant"]').click();
+            await wait(20);
+          }
+        }
+        [...document.querySelectorAll('.kb-history-main')].at(-1).click();
+        await wait(400);
+        document.querySelectorAll('.kb-search-run, .kb-search-history').forEach(el => (el.scrollTop = 0));`,
+      cleanup: `click('#sidebar-tabs .sidebar-tab[data-tab="sessions"]');`,
+    },
   };
 }
+
+// Knowledge-tab helpers. React inputs only see value changes made through the
+// native setter followed by an input/change event.
+const KB_HELPERS = `
+  const setValue = (el, value) => {
+    const proto = el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
+    el.dispatchEvent(new Event(el instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }));
+  };
+  const tab = name => [...document.querySelectorAll('.kb-tabs button')].find(b => b.textContent === name).click();
+  const openKnowledge = async () => {
+    click('#sidebar-tabs .sidebar-tab[data-tab="kb"]');
+    for (let i = 0; i < 80 && !$('.kb-rank-list li'); i++) await wait(250);
+    for (let i = 0; i < 80 && $('.kb-tabs-status'); i++) await wait(250);
+  };
+  const openEntry = async (id, filter) => {
+    const input = $('.kb-sidebar-filter input');
+    setValue(input, filter);
+    await wait(200);
+    [...document.querySelectorAll('#kb-content [data-entry-id]')].find(r => r.dataset.entryId === id).click();
+    await wait(100);
+    setValue(input, '');
+    await wait(300);
+  };
+`;
 
 const DIFF_OLD = `import { db } from '@/lib/db';
 
@@ -216,6 +287,8 @@ async function setUpDemo(cdp, manifest) {
 async function main() {
   const only = new Set(process.argv.slice(2));
   const manifest = seed(DEMO_HOME);
+  const knowledge = await startKnowledgeServices(manifest.knowledge);
+  process.env.SWITCHBOARD_KB_JEV_URL = knowledge.jevUrl;
   const child = launch(manifest, { port: PORT });
   let cdp;
   try {
@@ -257,10 +330,11 @@ async function main() {
     if (process.env.SB_DEMO_KEEP === '1') {
       child.unref();
       console.log(
-        `Demo left running (pid ${child.pid}, CDP port ${PORT}); close the window to exit.`,
+        `Demo left running (pid ${child.pid}, CDP port ${PORT}); close the window to exit. Ctrl+C stops the stand-in second-brain daemon.`,
       );
     } else {
       child.kill('SIGTERM');
+      knowledge.close();
     }
   }
 }

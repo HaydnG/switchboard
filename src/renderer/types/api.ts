@@ -6,6 +6,7 @@ import type {
   ControlToastOptions,
 } from '@renderer/types/control-ui';
 import type { LegacyShellAction } from '@renderer/lib/legacy-shell-bridge';
+import type { KbKnowledgeApi } from '@renderer/types/knowledge';
 
 export type { ControlDialogOptions, ControlDialogResult, ControlToastOptions };
 
@@ -87,7 +88,7 @@ export interface SearchResult {
 
 export type EventCallback = (...args: unknown[]) => void;
 
-export interface SwitchboardApi {
+export interface SwitchboardApi extends KbKnowledgeApi {
   getPlans: () => Promise<unknown[]>;
   readPlan: (filename: string) => Promise<{ content: string; filePath: string }>;
   savePlan: (filePath: string, content: string) => Promise<ApiResult>;
@@ -207,6 +208,7 @@ declare global {
   interface WindowEventMap {
     'switchboard:react-command': CustomEvent<{ action: LegacyShellAction }>;
     'switchboard:save-update-restart-state': CustomEvent<void>;
+    'switchboard:kb-activate': CustomEvent<void>;
   }
 }
 
