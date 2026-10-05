@@ -486,6 +486,7 @@ function createTerminalEntry(session) {
     webglRetryTimer: 0,
   };
   openSessions.set(sessionId, entry);
+  if (typeof saveOpenSessionsState === 'function') saveOpenSessionsState();
   observeTerminalRendering(entry);
 
   // Wire up IPC (use entry.session.sessionId so fork re-keying works)
@@ -578,6 +579,7 @@ function destroySession(sessionId) {
   entry.terminal.dispose();
   entry.element.remove();
   openSessions.delete(sessionId);
+  if (typeof saveOpenSessionsState === 'function') saveOpenSessionsState();
   const card = gridCards.get(sessionId);
   if (card) {
     card.remove();
