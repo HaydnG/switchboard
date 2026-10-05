@@ -8,9 +8,9 @@
   // One-shot blob written right before an auto-update relaunch and consumed on
   // the next boot.
   const UPDATE_RESTART_STATE_KEY = 'pendingUpdateRestartState';
-  // Durable blob written on every normal quit so the same set of open sessions
-  // can be reopened on the next ordinary launch. Same shape as the update blob;
-  // kept under a distinct key so the two restore paths never clobber each other.
+  // Durable blob of the open agent sessions, refreshed on open/close (and again
+  // on unload). Same shape as the update blob; kept under a distinct key so the
+  // two restore paths never clobber each other.
   const OPEN_SESSIONS_STATE_KEY = 'persistedOpenSessions';
 
   function collectUpdateRestartState(openSessions, { activeSessionId = null, gridViewActive = false } = {}) {
