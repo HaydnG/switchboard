@@ -70,12 +70,16 @@ const isRendererReload = navigationEntry?.type === 'reload';
 const openSessions = new Map();
 window._openSessions = openSessions;
 let activeSessionId = sessionStorage.getItem('activeSessionId') || null;
+// Launch restore reads the previous snapshot before any write is allowed, so
+// grid auto-mount cannot replace it with a partial set.
+let openSessionPersistReady = false;
 function setActiveSession(id) {
   activeSessionId = id;
   if (id) sessionStorage.setItem('activeSessionId', id);
   else sessionStorage.removeItem('activeSessionId');
   // Update file panel to show this session's open files/diffs
   if (typeof switchPanel === 'function') switchPanel(id);
+  if (typeof saveOpenSessionsState === 'function') saveOpenSessionsState();
 }
 // Persist slug group expand state across reloads
 function getExpandedSlugs() {
@@ -1181,6 +1185,7 @@ window.api.onSessionDetected((tempId, realId) => {
   terminalHeaderId.textContent = realId;
   terminalHeaderName.textContent = 'New session';
   applyRuntimeLabel(terminalHeaderRuntime, entry.session.runtime);
+  saveOpenSessionsState();
 
   // Refresh sidebar to show the new session, then select it
   loadProjects().then(() => {
@@ -1226,6 +1231,7 @@ window.api.onSessionForked((oldId, newId) => {
 
   terminalHeaderId.textContent = newId;
   applyRuntimeLabel(terminalHeaderRuntime, entry.session.runtime);
+  saveOpenSessionsState();
 
   loadProjects().then(() => {
     const item = document.querySelector(`[data-session-id="${newId}"]`);
@@ -1247,6 +1253,7 @@ window.api.onProcessExited((sessionId, exitCode) => {
     entry.exitedAt = Date.now();
     keepRecentlyExitedSessionVisible(sessionId);
     recordTimelineEvent(sessionId, 'exited', 'Process exited', `Exit code ${exitCode}.`);
+    saveOpenSessionsState();
     // Write a visible exit banner so the user can see when the process ended
     // and read any error output it printed (claude / devbox / shell stderr).
     // Without this, a fast-failing pre-launch command would tear down the
@@ -2251,6 +2258,7 @@ function markOpenTerminalClosed(sessionId, entry) {
   if (typeof scheduleClosedTerminalReclaim === 'function') {
     scheduleClosedTerminalReclaim(sessionId);
   }
+  saveOpenSessionsState();
 }
 
 async function openSession(session, customOptions) {
@@ -2616,6 +2624,12 @@ loadProjects().then(async () => {
     const session = sessionMap.get(activeSessionId);
     if (session) openSession(session);
   }
+}).finally(() => {
+  // Subsequent opens, closes, and focus changes persist immediately.
+  // Skip the initial write when nothing is mounted so a reload cannot wipe
+  // the previous snapshot before the user opens anything.
+  openSessionPersistReady = true;
+  if (openSessions.size > 0) saveOpenSessionsState();
 });
 
 // Live-reload sidebar when filesystem changes are detected
@@ -2783,17 +2797,20 @@ async function restoreUpdateRestartState() {
 }
 
 // --- Persist & restore open sessions across an ordinary quit → relaunch ---
-// Mirrors the auto-update restart flow but uses a durable localStorage key that
-// we refresh on every normal quit (not a one-shot). PTYs die when the app quits,
-// so "persist" means re-open/resume the same sessions on next launch — exactly
-// what the update path does.
+// Mirrors the auto-update restart flow but uses a durable localStorage key.
+// PTYs die when the app quits, so "persist" means re-open/resume the same
+// sessions on next launch. The blob is a short list of session ids, refreshed
+// on open, close, exit, id rekey, and active-session changes — not on a timer —
+// and again on unload in case the last mutation did not land.
 function restoreOpenSessionsEnabled() {
   // Default ON: only an explicit `false` disables it.
   return !(appGlobalSettings && appGlobalSettings.restoreSessionsOnLaunch === false);
 }
 
-// Synchronous (runs from beforeunload/pagehide) — must not await anything.
+// Synchronous — must not await anything. No-ops until launch restore has read
+// the previous snapshot (see openSessionPersistReady).
 function saveOpenSessionsState() {
+  if (!openSessionPersistReady) return;
   if (typeof collectUpdateRestartState !== 'function') return;
   if (!restoreOpenSessionsEnabled()) {
     try { localStorage.removeItem(OPEN_SESSIONS_STATE_KEY); } catch {}
@@ -2845,8 +2862,8 @@ async function restoreOpenSessionsOnLaunch() {
   return uniqueSessions.length > 0;
 }
 
-// Persist on the renderer unload that accompanies an ordinary quit. localStorage
-// writes are synchronous and durable, so the blob survives to the next launch.
+// Backstop for a normal quit. Mutations above already keep the blob current;
+// unload covers a force-close that races the last open or close.
 window.addEventListener('beforeunload', saveOpenSessionsState);
 window.addEventListener('pagehide', saveOpenSessionsState);
 
