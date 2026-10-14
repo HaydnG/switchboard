@@ -11,7 +11,7 @@ const JEV_GUIDANCE =
 const JUDGED_EXCERPT_CHARS = 500;
 const RELEVANCE_MIN = 0.5;
 /** The plugin drops Jev answers slower than this. */
-const PRODUCTION_JEV_TIMEOUT_MS = 1500;
+const PRODUCTION_JEV_TIMEOUT_MS = 2500;
 
 /**
  * The Jev endpoint. `SWITCHBOARD_KB_JEV_URL` (the README screenshot demo) may
