@@ -11,7 +11,7 @@ const RELEVANCE_GUIDANCE =
 const JUDGED_EXCERPT_CHARS = 500;
 const RELEVANCE_MIN = 0.5;
 /** The plugin drops gateway answers slower than this. */
-const GATEWAY_TIMEOUT_MS = 1500;
+const GATEWAY_TIMEOUT_MS = 2500;
 
 /**
  * The gateway endpoint. `SWITCHBOARD_KB_GATEWAY_URL` (the README screenshot demo) may
