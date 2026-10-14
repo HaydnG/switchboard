@@ -72,6 +72,28 @@ test('loadKbConfig expands ~, keeps existing roots and applies layout and boost'
   assert.deepEqual(config.gateway, { keyFile: path.join(home, '.secrets/key'), jwtFile: null });
 });
 
+test('loadKbConfig resolves repo roots to the daemon clone, before the clone exists', () => {
+  const home = tempHome();
+  fs.mkdirSync(path.join(home, 'Notes'));
+  writeConfig(home, {
+    vault: '~/Notes',
+    roots: [
+      { id: 'platform', repo: 'example/platform', paths: ['/docs/', 'rfcs'] },
+      { id: 'kb', repo: 'example/team-kb', label: 'team KB' },
+    ],
+  });
+
+  const clones = path.join(home, '.cache', 'second-brain', 'repos');
+  assert.deepEqual(
+    loadKbConfig({ env: {}, home }).roots.slice(1).map((root) => [root.id, root.label, root.path]),
+    [
+      ['platform', 'example/platform', path.join(clones, 'platform', 'docs')],
+      ['platform', 'example/platform', path.join(clones, 'platform', 'rfcs')],
+      ['kb', 'team KB', path.join(clones, 'kb')],
+    ],
+  );
+});
+
 test('loadKbConfig honours SECOND_BRAIN_CONFIG and reports a missing vault', () => {
   const home = tempHome();
   const file = path.join(home, 'alt.json');

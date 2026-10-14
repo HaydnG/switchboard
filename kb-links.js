@@ -124,15 +124,19 @@ function loadKbConfig({ env = process.env, home = os.homedir(), fsImpl = fs } = 
     for (const entry of Array.isArray(raw.roots) ? raw.roots : []) {
       if (!entry || typeof entry !== 'object') continue;
       const id = typeof entry.id === 'string' ? entry.id : '';
+      const label = typeof entry.label === 'string' ? entry.label : id;
+      const exclude = [...BASE_EXCLUDE, ...strings(entry.exclude)];
+      if (id && typeof entry.repo === 'string' && entry.repo.trim()) {
+        const clone = path.join(cacheDir, 'repos', id);
+        const paths = strings(entry.paths).map(trimSlashes).filter(Boolean);
+        for (const rootPath of paths.length ? paths.map((p) => path.join(clone, p)) : [clone]) {
+          roots.push({ id, path: rootPath, label: typeof entry.label === 'string' ? entry.label : entry.repo.trim(), exclude, isVault: false });
+        }
+        continue;
+      }
       const rootPath = typeof entry.path === 'string' ? expandHome(entry.path, home) : '';
       if (!id || !rootPath || !fsImpl.existsSync(rootPath)) continue;
-      roots.push({
-        id,
-        path: rootPath,
-        label: typeof entry.label === 'string' ? entry.label : id,
-        exclude: [...BASE_EXCLUDE, ...strings(entry.exclude)],
-        isVault: false,
-      });
+      roots.push({ id, path: rootPath, label, exclude, isVault: false });
     }
   }
 
