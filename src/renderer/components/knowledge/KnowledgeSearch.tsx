@@ -173,7 +173,7 @@ function Metrics({ runs }: { runs: KbEvalRun[] }) {
           <span>Median Jev</span>
           <strong>{jevMs === null ? '—' : formatMs(jevMs)}</strong>
           <em>
-            {overBudget} over the {formatMs(runs[0]?.productionTimeoutMs ?? 1500)} budget
+            {overBudget} over the {formatMs(runs[0]?.productionTimeoutMs ?? 2500)} budget
           </em>
         </div>
         <div>
