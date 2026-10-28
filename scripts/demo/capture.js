@@ -289,6 +289,7 @@ async function main() {
   const manifest = seed(DEMO_HOME);
   const knowledge = await startKnowledgeServices(manifest.knowledge);
   process.env.SWITCHBOARD_KB_GATEWAY_URL = knowledge.gatewayUrl;
+  process.env.SWITCHBOARD_KB_GATEWAY_MODEL = "demo/gateway";
   const child = launch(manifest, { port: PORT });
   let cdp;
   try {

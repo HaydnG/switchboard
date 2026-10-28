@@ -284,7 +284,7 @@ export interface KbEvalRun {
   labels: Record<number, boolean>;
   timings: KbSearchResult['timings'];
   gateway: KbSearchResult['gateway'];
-  productionTimeoutMs: number;
+  budgetMs: number;
 }
 
 export function evalRunFromResult(result: KbSearchResult): KbEvalRun {
@@ -302,11 +302,11 @@ export function evalRunFromResult(result: KbSearchResult): KbEvalRun {
     labels: {},
     timings: result.timings,
     gateway: result.gateway,
-    productionTimeoutMs: result.productionTimeoutMs,
+    budgetMs: result.budgetMs,
   };
 }
 
-/** gateway's picks at a threshold: probability ≥ threshold, most relevant first, at most `max`. */
+/** Gateway picks at a threshold: probability ≥ threshold, most relevant first, at most `max`. */
 export function gatewayPicks(run: KbEvalRun, threshold = run.threshold): number[] {
   return run.candidates
     .map((candidate, i) => [candidate.relevance, i] as const)
@@ -344,7 +344,7 @@ export interface KbPickScore {
 }
 
 /**
- * Scores picks the way benchmark does: precision over everything
+ * Scores picks: precision over everything
  * injected, recall capped at `max` per case, and silence when nothing is relevant.
  * Unlabelled candidates count as not relevant.
  */
@@ -379,7 +379,7 @@ export function scorePicks(runs: KbEvalRun[], pick: (run: KbEvalRun) => number[]
   };
 }
 
-/** Share of labelled candidates where gateway's p ≥ threshold agrees with the label. */
+/** Share of labelled candidates where the gateway's p ≥ threshold agrees with the label. */
 export function gatewayAgreement(runs: KbEvalRun[], threshold: number): number | null {
   let agree = 0;
   let total = 0;

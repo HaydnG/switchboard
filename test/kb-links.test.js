@@ -51,7 +51,6 @@ test('loadKbConfig expands ~, keeps existing roots and applies layout and boost'
     exclude: ['/Private/'],
     layout: { wiki: '/wiki/', discovered: 'raw/Found' },
     boost: { 'agent-memory/': 2, bad: -1 },
-    gateway: { keyFile: '~/.secrets/key' },
   });
 
   const config = loadKbConfig({ env: {}, home });
@@ -69,7 +68,6 @@ test('loadKbConfig expands ~, keeps existing roots and applies layout and boost'
   assert.ok(config.roots[0].exclude.includes('/Private/'));
   assert.ok(config.roots[1].exclude.includes('/drafts/'));
   assert.deepEqual(config.boost, { 'wiki/': 3, 'agent-memory/': 2 });
-  assert.deepEqual(config.gateway, { keyFile: path.join(home, '.secrets/key'), jwtFile: null });
 });
 
 test('loadKbConfig resolves repo roots to the daemon clone, before the clone exists', () => {
@@ -102,7 +100,6 @@ test('loadKbConfig honours SECOND_BRAIN_CONFIG and reports a missing vault', () 
   assert.equal(config.configFile, file);
   assert.equal(config.vault, '');
   assert.match(config.error, /vault not found/);
-  assert.equal(config.gateway, null);
 });
 
 test('tierBoost picks the largest matching boost', () => {

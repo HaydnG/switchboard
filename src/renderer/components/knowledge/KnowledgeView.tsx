@@ -125,20 +125,22 @@ export function KnowledgeView({ kb, tab, onTab, children }: KnowledgeViewProps) 
                 </StatusChip>
               )}
               <StatusChip
-                tone={overview.gateway.readable ? 'ok' : overview.gateway.configured ? 'warn' : 'off'}
+                tone={
+                  overview.gateway.readable ? 'ok' : overview.gateway.configured ? 'warn' : 'off'
+                }
                 title={
                   overview.gateway.readable
-                    ? `gateway key from ${overview.gateway.source}`
+                    ? `Gateway auth from ${overview.gateway.source}`
                     : overview.gateway.configured
-                      ? 'The configured gateway key file is not readable'
-                      : 'No gateway key configured — search runs without the relevance gate'
+                      ? 'The gateway has no auth configured'
+                      : 'No gateway configured — search runs without the relevance gate'
                 }
               >
                 {overview.gateway.readable
-                  ? 'gateway ready'
+                  ? 'Gateway ready'
                   : overview.gateway.configured
-                    ? 'gateway key unreadable'
-                    : 'gateway off'}
+                    ? 'Gateway unauthenticated'
+                    : 'Gateway off'}
               </StatusChip>
               {health && health.unpromoted > 0 && (
                 <StatusChip tone="warn" title="Discovered notes waiting for /promote">

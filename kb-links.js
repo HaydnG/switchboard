@@ -1,11 +1,6 @@
 // kb-links.js — pure helpers for the second-brain knowledge base integration:
 // config loading, entry classification, link extraction/resolution and the
 // keyword-term extraction the daemon's keyword leg expects.
-//
-// Semantics mirror doordash/second-brain-kb (plugins/second-brain/src):
-// the config module for the config file, the verify module for frontmatter lists and
-// source resolution, the queue module for discovered-note citations and the core module for
-// extractTerms. Keep them in step when that plugin changes.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -46,7 +41,7 @@ function trimSlashes(value) {
 }
 
 /**
- * second-brain's config, resolved the way the config module resolves it.
+ * second-brain's config.
  * Never throws: problems are reported in `error` and leave `vault` empty.
  */
 function loadKbConfig({ env = process.env, home = os.homedir(), fsImpl = fs } = {}) {
@@ -63,7 +58,6 @@ function loadKbConfig({ env = process.env, home = os.homedir(), fsImpl = fs } = 
     wikiDir: DEFAULT_WIKI_DIR,
     discoveredDir: DEFAULT_DISCOVERED_DIR,
     roots: [],
-    gateway: null,
     boost: { [`${DEFAULT_WIKI_DIR}/`]: 3 },
     caFile: null,
     error: undefined,
@@ -90,16 +84,6 @@ function loadKbConfig({ env = process.env, home = os.homedir(), fsImpl = fs } = 
       if (typeof weight === 'number' && weight > 0) boost[key] = weight;
     }
   }
-  const gateway =
-    raw.gateway &&
-    typeof raw.gateway === 'object' &&
-    (typeof raw.gateway.keyFile === 'string' || typeof raw.gateway.jwtFile === 'string')
-      ? {
-          keyFile: typeof raw.gateway.keyFile === 'string' ? expandHome(raw.gateway.keyFile, home) : null,
-          jwtFile: typeof raw.gateway.jwtFile === 'string' ? expandHome(raw.gateway.jwtFile, home) : null,
-        }
-      : null;
-
   const caPath = typeof raw.caFile === 'string' ? expandHome(raw.caFile, home) : '';
   const caFile = caPath && fsImpl.existsSync(caPath) ? caPath : null;
 
@@ -140,7 +124,7 @@ function loadKbConfig({ env = process.env, home = os.homedir(), fsImpl = fs } = 
     }
   }
 
-  return { ...base, vault, wikiDir, discoveredDir, roots, gateway, boost, caFile, error };
+  return { ...base, vault, wikiDir, discoveredDir, roots, boost, caFile, error };
 }
 
 /** Ranking weight for a path: the largest configured boost whose substring it contains. */
@@ -154,7 +138,7 @@ function tierBoost(entryPath, boost) {
 
 /**
  * Where an index entry lives. Index paths are vault-relative for the vault and
- * absolute for extra roots (the indexer module).
+ * absolute for extra roots.
  */
 function classifyEntry(entryPath, config) {
   if (!path.isAbsolute(entryPath)) {
@@ -449,7 +433,7 @@ async function buildLinkGraph(
   return { edges, unresolved, unreadable, ms: Date.now() - startedAt };
 }
 
-// --- Keyword terms (the core module extractTerms) -----------------------------------
+// --- Keyword terms -----------------------------------------------------------
 
 const MIN_TERM_LEN = 4;
 const MAX_TERMS = 8;
@@ -467,7 +451,7 @@ const STOPWORDS = new Set(
   ).split(' '),
 );
 
-/** Keyword terms for the daemon's FTS leg, exactly as second-brain derives them. */
+/** Keyword terms for the daemon's FTS leg. */
 function extractTerms(prompt) {
   const seen = new Set();
   const terms = [];

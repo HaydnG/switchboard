@@ -42,7 +42,7 @@ export interface KbOverview {
     discoveredDir: string;
     roots: KbRoot[];
   };
-  gateway: { configured: boolean; readable: boolean; source: 'jwtFile' | 'keyFile' | null };
+  gateway: { configured: boolean; readable: boolean; source: 'env' | null };
   daemon: { running: boolean; port: number | null; health: KbDaemonHealth | null };
   plugin: { dir: string; version: string | null; bun: boolean } | null;
   index: {
@@ -111,7 +111,7 @@ export interface KbSearchResult {
   pool: number;
   max: number;
   threshold: number;
-  productionTimeoutMs: number;
+  budgetMs: number;
   ranAt: number;
   timings: { searchMs: number; gatewayMs: number; totalMs: number };
   gateway: {

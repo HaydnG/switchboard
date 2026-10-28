@@ -41,13 +41,13 @@ const overview: KbOverview = {
       { id: 'repo', label: 'Repo docs', path: '/repo', isVault: false },
     ],
   },
-  gateway: { configured: true, readable: true, source: 'jwtFile' },
+  gateway: { configured: true, readable: true, source: 'env' },
   daemon: {
     running: true,
     port: 4123,
     health: { model: 'm', files: 3, chunks: 12, indexed_at: Date.now(), unpromoted: 0 },
   },
-  plugin: { dir: '/plugin', version: '0.3.6', bun: true },
+  plugin: { dir: '/plugin', version: '0.0.0', bun: true },
   index: {
     dbPath: '/cache/index.db',
     exists: true,
@@ -65,10 +65,17 @@ const searchResult: KbSearchResult = {
   pool: 12,
   max: 3,
   threshold: 0.5,
-  productionTimeoutMs: 1500,
+  budgetMs: 2500,
   ranAt: Date.now(),
   timings: { searchMs: 40, gatewayMs: 900, totalMs: 940 },
-  gateway: { ok: true, error: null, model: 'gateway', cost: 0.0004, inputTokens: 800, outputTokens: 20 },
+  gateway: {
+    ok: true,
+    error: null,
+    model: 'gateway',
+    cost: 0.0004,
+    inputTokens: 800,
+    outputTokens: 20,
+  },
   candidates: [
     {
       path: 'Wiki/auth.md',
@@ -198,7 +205,7 @@ describe('KnowledgeHost', () => {
     expect(api.kbReadEntry).toHaveBeenLastCalledWith('Wiki/auth.md');
   });
 
-  it('runs a search, records labels and scores search against gateway', async () => {
+  it('runs a search, records labels and scores search against the gateway', async () => {
     const api = installApi();
     const { view } = await activate();
     fireEvent.click(within(view).getByRole('tab', { name: 'Search & eval' }));
@@ -225,7 +232,7 @@ describe('KnowledgeHost', () => {
     });
     const searchRow = within(table).getByText('Search alone (top N)').closest('tr')!;
     const gatewayRow = within(table)
-      .getByText(/gateway p ≥ 0.5/)
+      .getByText(/Gateway p ≥ 0.5/)
       .closest('tr')!;
     expect(searchRow.querySelectorAll('td')[2].textContent).toBe('0.50');
     expect(gatewayRow.querySelectorAll('td')[2].textContent).toBe('1.00');

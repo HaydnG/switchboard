@@ -1,10 +1,9 @@
 // kb-ipc.js — IPC for the Knowledge tab: browse, read and search the knowledge
-// bases connected through second-brain (doordash/second-brain-kb).
+// bases connected through second-brain.
 //
 // Everything is read-only. Entries come from the daemon's SQLite index, search
-// goes through the daemon's hybrid search, and relevance through the same gateway
-// Decisions request the plugin makes (the plugin), so what the tab shows
-// is what agents get.
+// goes through the daemon's hybrid search, and relevance through the gateway
+// configured in kb-gateway.js, so what the tab shows is what search would inject.
 const { ipcMain, dialog, shell } = require('electron');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -24,6 +23,9 @@ const {
   GATEWAY_TIMEOUT_MS,
   RELEVANCE_MIN,
   buildGatewayRequest,
+  gatewayConfigured,
+  gatewayHeaders,
+  gatewayModel,
   gatewayUrl,
   parseGatewayAnswers,
   selectRelevant,
@@ -88,7 +90,7 @@ function compareVersions(a, b) {
   return 0;
 }
 
-/** The installed plugin copy, the way the README locates it (omp first, then Claude Code). */
+/** The installed plugin copy, if present (omp first, then Claude Code). */
 function findPluginDir(home = os.homedir()) {
   const candidates = [];
   try {
@@ -131,7 +133,7 @@ function findBun(home = os.homedir()) {
   ].find((candidate) => candidate && fs.existsSync(candidate));
 }
 
-/** Spawn the daemon detached, as the client module ensureDaemon does, and wait for /health. */
+/** Spawn the daemon detached and wait for /health. */
 async function startDaemon(config) {
   if (!config.vault) return { ok: false, error: config.error || 'second-brain is not configured' };
   if (await daemonHealth(config, 400)) return { ok: true, alreadyRunning: true };
@@ -234,14 +236,14 @@ function readIndex(config) {
   }
 }
 
-function credentialStatus(config) {
-  if (!config.gateway) return { configured: false, readable: false, source: null };
-  const file = config.gateway.jwtFile && fs.existsSync(config.gateway.jwtFile) ? config.gateway.jwtFile : null;
-  const keyFile = config.gateway.keyFile && fs.existsSync(config.gateway.keyFile) ? config.gateway.keyFile : null;
+/** Whether the relevance eval can run, and whether the gateway has auth configured. */
+function credentialStatus() {
+  const configured = gatewayConfigured();
+  const authenticated = Object.keys(gatewayHeaders()).length > 0;
   return {
-    configured: true,
-    readable: Boolean(file || keyFile),
-    source: file ? 'jwtFile' : keyFile ? 'keyFile' : null,
+    configured,
+    readable: configured && authenticated,
+    source: authenticated ? 'env' : null,
   };
 }
 
@@ -272,7 +274,7 @@ async function getOverview() {
         isVault,
       })),
     },
-    gateway: credentialStatus(config),
+    gateway: credentialStatus(),
     daemon: { running: Boolean(health), port: daemonPort(config), health },
     plugin: plugin ? { dir: plugin.dir, version: plugin.version, bun: Boolean(findBun()) } : null,
     index: {
@@ -407,55 +409,33 @@ async function readEntry(id) {
   }
 }
 
-// --- Search + gateway ----------------------------------------------------------------
+// --- Search + relevance gate -----------------------------------------------------
 
-/** the gateway credential, re-read per call so rotation needs no restart (relevance.ts). */
-function gatewayCredential(config) {
-  if (!config.gateway) return null;
-  if (config.gateway.jwtFile) {
-    try {
-      const jwt = JSON.parse(fs.readFileSync(config.gateway.jwtFile, 'utf8'));
-      const live = typeof jwt.exp !== 'number' || jwt.exp * 1000 > Date.now();
-      if (typeof jwt.access_token === 'string' && live) return jwt.access_token;
-    } catch {
-      // fall through to the key file
-    }
-  }
-  if (config.gateway.keyFile) {
-    try {
-      return fs.readFileSync(config.gateway.keyFile, 'utf8').trim() || null;
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
-async function judgeRelevance(config, query, candidates, timeoutMs) {
+async function judgeRelevance(query, candidates, timeoutMs, model) {
   const startedAt = Date.now();
-  const key = gatewayCredential(config);
-  if (!key) return { probs: null, ms: 0, error: 'no readable gateway credential in the config' };
+  const url = gatewayUrl();
+  if (!url) return { probs: null, ms: 0, error: 'no gateway URL configured' };
+  if (!model) return { probs: null, ms: 0, error: 'no gateway model configured' };
   try {
-    const res = await fetch(gatewayUrl(), {
+    const res = await fetch(url, {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-gateway-key': key,
-        'x-gateway-provider': 'demo',
-        'x-gateway-host': 'https://gateway.invalid/api',
-      },
-      body: JSON.stringify(buildGatewayRequest(query, candidates)),
+      headers: { 'content-type': 'application/json', ...gatewayHeaders() },
+      body: JSON.stringify(buildGatewayRequest(query, candidates, model)),
       signal: AbortSignal.timeout(timeoutMs),
     });
     const ms = Date.now() - startedAt;
     if (!res.ok) {
       const text = await res.text().catch(() => '');
-      return { probs: null, ms, error: `gateway returned ${res.status} ${text.slice(0, 200)}`.trim() };
+      return {
+        probs: null,
+        ms,
+        error: `The gateway returned ${res.status} ${text.slice(0, 200)}`.trim(),
+      };
     }
     const body = await res.json();
     const probs = parseGatewayAnswers(body, candidates.length);
     if (!probs) {
-      return { probs: null, ms, error: 'gateway answered without a probability for every note' };
+      return { probs: null, ms, error: 'The gateway answered without a probability for every note' };
     }
     return {
       probs,
@@ -469,7 +449,7 @@ async function judgeRelevance(config, query, candidates, timeoutMs) {
     return {
       probs: null,
       ms: Date.now() - startedAt,
-      error: err.name === 'TimeoutError' ? `gateway timed out after ${timeoutMs} ms` : err.message,
+      error: err.name === 'TimeoutError' ? `The gateway timed out after ${timeoutMs} ms` : err.message,
     };
   }
 }
@@ -516,7 +496,7 @@ async function search(options) {
     }));
 
   const gateway = candidates.length
-    ? await judgeRelevance(config, query, candidates, timeoutMs)
+    ? await judgeRelevance(query, candidates, timeoutMs, gatewayModel())
     : { probs: [], ms: 0 };
   const selected = gateway.probs ? selectRelevant(gateway.probs, max) : [];
 
@@ -527,7 +507,7 @@ async function search(options) {
     pool,
     max,
     threshold: RELEVANCE_MIN,
-    productionTimeoutMs: GATEWAY_TIMEOUT_MS,
+    budgetMs: GATEWAY_TIMEOUT_MS,
     ranAt: Date.now(),
     timings: { searchMs, gatewayMs: gateway.ms, totalMs: Date.now() - startedAt },
     gateway: {

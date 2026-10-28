@@ -1,5 +1,5 @@
 // A made-up second-brain knowledge base for the demo HOME, plus stand-ins for
-// the second-brain daemon and the gateway relevance endpoint, so the Knowledge tab
+// the second-brain daemon and a stand-in relevance gateway, so the Knowledge tab
 // can be screenshotted without real notes or credentials.
 const fs = require('fs');
 const http = require('http');
@@ -358,16 +358,14 @@ function seedKnowledge(home, now = Date.now()) {
   const config = {
     vault: '~/notes/second-brain',
     roots: [{ id: 'handbook', label: 'acme/platform-handbook', path: '~/notes/platform-handbook' }],
-    gateway: { keyFile: '~/.demo/gateway.key' },
   };
   const configDir = path.join(home, '.config', 'second-brain');
   fs.mkdirSync(configDir, { recursive: true });
   fs.writeFileSync(path.join(configDir, 'config.json'), JSON.stringify(config, null, 2));
-  fs.writeFileSync(path.join(demoDir, 'gateway.key'), 'demo-not-a-real-key\n');
 
   const pluginDir = path.join(home, '.claude', 'plugins', 'cache', 'second-brain', 'second-brain', '0.3.7');
   fs.mkdirSync(path.join(pluginDir, 'src', 'engine'), { recursive: true });
-  fs.writeFileSync(path.join(pluginDir, 'package.json'), JSON.stringify({ name: 'second-brain', version: '0.3.7' }));
+  fs.writeFileSync(path.join(pluginDir, 'package.json'), JSON.stringify({ name: 'second-brain', version: '0.0.0' }));
   fs.writeFileSync(path.join(pluginDir, 'src', 'engine', 'daemon.ts'), '// demo stand-in\n');
 
   const statements = [
@@ -459,7 +457,7 @@ function searchChunks(chunks, query, k) {
   return hits;
 }
 
-/** gateway-like judgement: high for the notes a demo query names as relevant, low otherwise. */
+/** Gateway-like judgement: high for the notes a demo query names as relevant, low otherwise. */
 function judge(queries, request, note) {
   const known = queries.find((q) => q.query === request);
   const jitter = unit(request, note.source);

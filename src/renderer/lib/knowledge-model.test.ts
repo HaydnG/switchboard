@@ -151,8 +151,15 @@ function run(probs: Array<number | null>, labels: Record<number, boolean>, max =
     candidates: probs.map(candidate),
     labels,
     timings: { searchMs: 50, gatewayMs: 300, totalMs: 360 },
-    gateway: { ok: true, error: null, model: 'gateway', cost: 0.0001, inputTokens: 1, outputTokens: 1 },
-    productionTimeoutMs: 1500,
+    gateway: {
+      ok: true,
+      error: null,
+      model: 'gateway',
+      cost: 0.0001,
+      inputTokens: 1,
+      outputTokens: 1,
+    },
+    budgetMs: 1500,
   };
 }
 

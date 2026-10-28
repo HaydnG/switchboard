@@ -169,18 +169,18 @@ Switchboard treats your sessions like an agent control room: it shows not just *
 
 ## Knowledge (second-brain)
 
-If you use the [second-brain](https://github.com/doordash/second-brain-kb) plugin, the Knowledge tab shows every knowledge base it indexes: the vault plus any extra roots from `~/.config/second-brain/config.json`.
+If you use the [second-brain](https://github.com/doordash/second-brain-kb) plugin, the Knowledge tab shows every knowledge base it indexes: the vault plus any extra roots from `~/.config/second-brain/config.json`. The relevance gate is optional and configured entirely by you: set `SWITCHBOARD_KB_GATEWAY_URL` and `SWITCHBOARD_KB_GATEWAY_MODEL`, plus `SWITCHBOARD_KB_GATEWAY_TOKEN` or `SWITCHBOARD_KB_GATEWAY_HEADERS` (JSON) when your gateway needs them. With no gateway set, search runs alone.
 
 ![Knowledge tab reading a wiki note, with its outgoing links and backlinks](build/screenshot-knowledge-reader.png)
 
 - **File tree** — Every indexed entry, grouped by knowledge base and folder, with a title/path filter. Wiki articles and discovered notes are marked.
 - **Reader** — Rendered notes with frontmatter, clickable `[[wikilinks]]` and relative links, and a connection tree of outgoing links and backlinks you can expand recursively. References that point outside the index are listed separately.
 - **Graph** — An interactive link graph (frontmatter `sources:` / `related:`, wikilinks, markdown links, `Discovered/` citations), either around one entry (1–3 hops) or as a map of the most connected hubs.
-- **Search & eval** — Runs the daemon's hybrid search and then the gateway relevance gate with the same request, threshold, and pool sizes as the prompt hook (12 → 3) or `vault_search` (24 → 8). It shows each candidate's retrieval leg, RRF score, and gateway probability, plus latency against the 1.5 s production budget and the gateway cost. Label candidates ✓ / ✗ to compare search alone against gateway at several thresholds (precision, recall, silence when nothing is relevant), then export the labelled runs in `benchmark`'s case format.
+- **Search & eval** — Runs the daemon's hybrid search and then the configured relevance gateway over the top candidates. It shows each candidate's retrieval leg, RRF score and gateway probability, plus latency against the configured budget and the gateway cost. Label candidates ✓ / ✗ to compare search alone against the gateway at several thresholds (precision, recall, silence when nothing is relevant), then export the labelled runs as benchmark cases.
 
 ![Link graph three hops around one note](build/screenshot-knowledge-graph.png)
 
-![Search & eval comparing search alone against the gateway gate over three labelled runs](build/screenshot-knowledge-search.png)
+![Search & eval comparing search alone against the gateway over three labelled runs](build/screenshot-knowledge-search.png)
 
 Switchboard never writes to your notes, and it opens the second-brain config and index read-only. **Reindex** asks the daemon to refresh its own index, and **Start** launches the daemon if it isn't running. Search runs and labels are stored in Switchboard's settings, not in the vault. The first link-graph build reads every note, which can take a minute on Google Drive; later builds reuse a per-file cache in `~/.switchboard/kb-links-cache.json`.
 
@@ -263,7 +263,7 @@ npm run electron
 
 The screenshots come from a demo with made-up projects, git repos, transcripts, and a scripted stand-in for `claude`, so no real sessions or credentials are shown. The demo runs under its own home directory (`/Users/Shared/demo` on macOS) with isolated app data, fullscreen at your display's native resolution.
 
-The Knowledge shots use a made-up second-brain vault and handbook. The capture script serves a stand-in daemon (search, health, reindex) and a scripted gateway on `127.0.0.1`, so nothing goes to the real gateway service. Building the demo index needs the `sqlite3` CLI, which macOS ships.
+The Knowledge shots use a made-up second-brain vault and handbook. The capture script serves a stand-in daemon (search, health, reindex) and a scripted gateway on `127.0.0.1`, so no request leaves the machine. Building the demo index needs the `sqlite3` CLI, which macOS ships.
 
 ```bash
 npm run screenshots                  # all shots, written to build/

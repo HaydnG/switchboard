@@ -32,14 +32,14 @@ const PRESETS: Record<
   prompt: {
     pool: 12,
     max: 3,
-    label: 'Prompt injection (12 → 3)',
-    help: 'What the UserPromptSubmit hook does: 12 candidates, gateway keeps at most 3.',
+    label: 'Narrow pool (12 → 3)',
+    help: 'A narrow candidate pool: 12 candidates, the gate keeps at most 3.',
   },
   vault: {
     pool: 24,
     max: 8,
-    label: 'vault_search (24 → 8)',
-    help: 'What the vault_search MCP tool does: 24 candidates, gateway keeps at most 8.',
+    label: 'Wide pool (24 → 8)',
+    help: 'A wide candidate pool: 24 candidates, the gate keeps at most 8.',
   },
 };
 
@@ -56,9 +56,9 @@ interface KnowledgeSearchProps {
 }
 
 function TimingBar({ run }: { run: KbEvalRun }) {
-  const scale = Math.max(run.timings.totalMs, run.productionTimeoutMs * 1.25);
+  const scale = Math.max(run.timings.totalMs, run.budgetMs * 1.25);
   const pct = (ms: number) => `${(ms / scale) * 100}%`;
-  const overBudget = run.timings.gatewayMs > run.productionTimeoutMs;
+  const overBudget = run.timings.gatewayMs > run.budgetMs;
   return (
     <div className="kb-timing">
       <div className="kb-timing-bar">
@@ -69,8 +69,8 @@ function TimingBar({ run }: { run: KbEvalRun }) {
         />
         <span
           className="kb-timing-budget"
-          style={{ left: pct(run.timings.searchMs + run.productionTimeoutMs) }}
-          title={`Production gateway timeout (${formatMs(run.productionTimeoutMs)})`}
+          style={{ left: pct(run.timings.searchMs + run.budgetMs) }}
+          title={`Gateway timeout (${formatMs(run.budgetMs)})`}
         />
       </div>
       <div className="kb-timing-legend">
@@ -78,9 +78,9 @@ function TimingBar({ run }: { run: KbEvalRun }) {
           <i className="kb-timing-search" /> Search {formatMs(run.timings.searchMs)}
         </span>
         <span>
-          <i className={`kb-timing-gateway${overBudget ? ' is-over' : ''}`} /> gateway{' '}
+          <i className={`kb-timing-gateway${overBudget ? ' is-over' : ''}`} /> Gateway{' '}
           {formatMs(run.timings.gatewayMs)}
-          {overBudget && ' — over the production budget, the hook would have injected nothing'}
+          {overBudget && ' — over the configured budget, the hook would have injected nothing'}
         </span>
         <span>Total {formatMs(run.timings.totalMs)}</span>
       </div>
@@ -142,7 +142,7 @@ function Metrics({ runs }: { runs: KbEvalRun[] }) {
         production: false,
       },
       ...THRESHOLDS.map((threshold) => ({
-        label: `gateway p ≥ ${threshold}`,
+        label: `Gateway p ≥ ${threshold}`,
         score: scorePicks(labelled, (run) => gatewayPicks(run, threshold)),
         production: threshold === 0.5,
       })),
@@ -152,7 +152,7 @@ function Metrics({ runs }: { runs: KbEvalRun[] }) {
   const searchMs = median(runs.map((run) => run.timings.searchMs));
   const gatewayRuns = runs.filter((run) => run.gateway.ok);
   const gatewayMs = median(gatewayRuns.map((run) => run.timings.gatewayMs));
-  const overBudget = runs.filter((run) => run.timings.gatewayMs > run.productionTimeoutMs).length;
+  const overBudget = runs.filter((run) => run.timings.gatewayMs > run.budgetMs).length;
   const cost = runs.reduce((sum, run) => sum + (run.gateway.cost ?? 0), 0);
   const agreement = gatewayAgreement(labelled, 0.5);
 
@@ -173,16 +173,16 @@ function Metrics({ runs }: { runs: KbEvalRun[] }) {
           <span>Median gateway</span>
           <strong>{gatewayMs === null ? '—' : formatMs(gatewayMs)}</strong>
           <em>
-            {overBudget} over the {formatMs(runs[0]?.productionTimeoutMs ?? 2500)} budget
+            {overBudget} over the {formatMs(runs[0]?.budgetMs ?? 2500)} budget
           </em>
         </div>
         <div>
-          <span>gateway agreement</span>
+          <span>Gateway agreement</span>
           <strong>{formatRatio(agreement)}</strong>
           <em>labels vs p ≥ 0.5</em>
         </div>
         <div>
-          <span>gateway cost</span>
+          <span>Gateway cost</span>
           <strong>{formatCost(runs.length ? cost : null)}</strong>
           <em>all runs</em>
         </div>
@@ -199,9 +199,7 @@ function Metrics({ runs }: { runs: KbEvalRun[] }) {
               <th>Picker</th>
               <th title="Candidates injected across labelled runs">Injected</th>
               <th title="Relevant ÷ injected">Precision</th>
-              <th title="Relevant found ÷ relevant available, capped at N per run (benchmark)">
-                Recall
-              </th>
+              <th title="Relevant found ÷ relevant available, capped at N per run">Recall</th>
               <th title="Of the runs where nothing was relevant, how many injected nothing">
                 Silent
               </th>
@@ -286,7 +284,7 @@ export function KnowledgeSearch({ kb, evalRuns, state, setState, onOpen }: Knowl
     if (result.ok) {
       kb.setNotice({
         tone: 'success',
-        text: `Exported ${cases.length} case${cases.length === 1 ? '' : 's'} to ${result.filePath}. Score it with: bun benchmark ${result.filePath}`,
+        text: `Exported ${cases.length} case${cases.length === 1 ? '' : 's'} to ${result.filePath}`,
       });
     } else if (!result.canceled)
       kb.setNotice({ tone: 'danger', text: result.error || 'Export failed' });
@@ -379,8 +377,7 @@ export function KnowledgeSearch({ kb, evalRuns, state, setState, onOpen }: Knowl
       )}
       {daemonRunning && !gatewayReady && (
         <div className="kb-callout">
-          gateway is not configured (no readable key in the second-brain config), so results are
-          search-only.
+          The relevance gateway is not configured, so results are search-only.
         </div>
       )}
       {state.failure && (
@@ -409,8 +406,8 @@ export function KnowledgeSearch({ kb, evalRuns, state, setState, onOpen }: Knowl
               <h3>Measure retrieval</h3>
               <p>
                 Each search runs the daemon’s hybrid retrieval (semantic + keyword, fused with RRF),
-                then asks gateway which candidates are relevant, exactly like the prompt hook. Label the
-                candidates to compare search alone against the gateway gate.
+                then asks the gateway which candidates are relevant. Label the candidates to compare
+                search alone against the gateway.
               </p>
             </div>
           ) : (
@@ -434,7 +431,7 @@ export function KnowledgeSearch({ kb, evalRuns, state, setState, onOpen }: Knowl
                       </span>
                     </>
                   ) : (
-                    <span className="kb-error">gateway: {run.gateway.error || 'unavailable'}</span>
+                    <span className="kb-error">Gateway: {run.gateway.error || 'unavailable'}</span>
                   )}
                 </div>
               </header>
@@ -447,7 +444,7 @@ export function KnowledgeSearch({ kb, evalRuns, state, setState, onOpen }: Knowl
                   titleOf={titleOf(run)}
                 />
                 <PickList
-                  title={`gateway gate · p ≥ ${run.threshold}, max ${run.max}`}
+                  title={`Gateway · p ≥ ${run.threshold}, max ${run.max}`}
                   picks={gatewayPicks(run)}
                   run={run}
                   titleOf={titleOf(run)}
@@ -460,7 +457,7 @@ export function KnowledgeSearch({ kb, evalRuns, state, setState, onOpen }: Knowl
                     <th>Candidate</th>
                     <th title="Which retrieval leg found it">Leg</th>
                     <th title="Reciprocal-rank-fusion score">RRF</th>
-                    <th title="gateway probability that the candidate is relevant">gateway p</th>
+                    <th title="Gateway probability that the candidate is relevant">Gateway p</th>
                     <th>Picked</th>
                     <th>Relevant?</th>
                   </tr>
@@ -538,7 +535,9 @@ export function KnowledgeSearch({ kb, evalRuns, state, setState, onOpen }: Knowl
                         </td>
                         <td className="kb-badges">
                           {searchTop.has(index) && <span className="kb-pill">top {run.max}</span>}
-                          {gatewayTop.has(index) && <span className="kb-pill is-gateway">gateway</span>}
+                          {gatewayTop.has(index) && (
+                            <span className="kb-pill is-gateway">Gateway</span>
+                          )}
                         </td>
                         <td className="kb-label-buttons">
                           <button
@@ -662,7 +661,7 @@ export function KnowledgeSearch({ kb, evalRuns, state, setState, onOpen }: Knowl
           )}
           <p className="kb-muted kb-footnote">
             Runs and labels are stored in Switchboard settings, never in the vault. The export
-            matches benchmark’s case format.
+            matches the benchmark case format.
           </p>
         </aside>
       </div>
