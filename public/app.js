@@ -17,6 +17,7 @@ const terminalHeaderShell = document.getElementById('terminal-header-shell');
 const terminalStopBtn = document.getElementById('terminal-stop-btn');
 const runningToggle = document.getElementById('running-toggle');
 const todayToggle = document.getElementById('today-toggle');
+const attentionPanelToggle = document.getElementById('attention-panel-toggle');
 const springCleaningBtn = document.getElementById('spring-cleaning-btn');
 const planViewer = document.getElementById('plan-viewer');
 const planPanel = new ViewerPanel(planViewer, {
@@ -228,6 +229,7 @@ let showArchived = false;
 let showStarredOnly = false;
 let showRunningOnly = false;
 let showTodayOnly = false;
+let showAttentionPanel = localStorage.getItem('showAttentionPanel') === '1';
 let cachedProjects = [];
 let cachedAllProjects = [];
 let activePtyIds = new Set();
@@ -1515,6 +1517,26 @@ todayToggle.addEventListener('click', () => {
   todayToggle.classList.toggle('active', showTodayOnly);
   refreshSidebar({ resort: true });
 });
+
+// --- Attention panel toggle (off until the toolbar enables it) ---
+function updateAttentionPanelToggle() {
+  if (!attentionPanelToggle) return;
+  attentionPanelToggle.classList.toggle('active', showAttentionPanel);
+  attentionPanelToggle.setAttribute('aria-pressed', showAttentionPanel ? 'true' : 'false');
+  const label = showAttentionPanel ? 'Hide attention panel' : 'Show attention panel';
+  attentionPanelToggle.title = label;
+  attentionPanelToggle.setAttribute('aria-label', label);
+  attentionPanelToggle.setAttribute('data-tooltip', label);
+}
+if (attentionPanelToggle) {
+  updateAttentionPanelToggle();
+  attentionPanelToggle.addEventListener('click', () => {
+    showAttentionPanel = !showAttentionPanel;
+    localStorage.setItem('showAttentionPanel', showAttentionPanel ? '1' : '0');
+    updateAttentionPanelToggle();
+    refreshSidebar();
+  });
+}
 
 // --- Sidebar view mode toggle (directory-first <-> folder-first) ---
 const VIEW_MODE_ICONS = {

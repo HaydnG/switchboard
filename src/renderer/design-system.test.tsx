@@ -187,7 +187,7 @@ describe('renderer application shell', () => {
     expect(events).toContainEqual({ action: 'open-session', sessionId: 'session-1' });
   });
 
-  it('keeps folder groups, attention inbox, and session filters visible', () => {
+  it('keeps folder groups and session filters visible', () => {
     render(<SwitchboardShell />);
     publishOverview({
       total: 1,
@@ -205,16 +205,41 @@ describe('renderer application shell', () => {
       sessions: [session],
     });
 
-    expect(screen.getByText('Attention')).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Sessions needing attention' })).toBeNull();
     expect(screen.getByText('Launch')).toBeTruthy();
     expect(screen.getAllByText('Update checkout tests').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Needs You').length).toBeGreaterThan(0);
-    expect(screen.getByRole('button', { name: 'Approve' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Deny' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Reply…' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Pinned' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Today' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Archived' })).toBeTruthy();
+  });
+
+  it('shows the attention inbox only after the toolbar toggle is enabled', () => {
+    render(<SwitchboardShell />);
+    publishOverview({
+      total: 1,
+      running: 1,
+      attention: 1,
+      sessions: [session],
+    });
+
+    const toggle = screen.getByRole('button', { name: 'Show attention panel' });
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+
+    fireEvent.click(toggle);
+    expect(
+      screen.getByRole('button', { name: 'Hide attention panel' }).getAttribute('aria-pressed'),
+    ).toBe('true');
+    expect(screen.getByRole('region', { name: 'Sessions needing attention' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Deny' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Reply…' })).toBeTruthy();
+    expect(localStorage.getItem('showAttentionPanel')).toBe('1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide attention panel' }));
+    expect(screen.queryByRole('region', { name: 'Sessions needing attention' })).toBeNull();
+    expect(localStorage.getItem('showAttentionPanel')).toBe('0');
   });
 
   it('exposes session and folder action menus', () => {
@@ -247,6 +272,7 @@ describe('renderer application shell', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Launch all sessions in Launch' }));
     expect(events).toContainEqual({ action: 'launch-group', groupId: 'launch' });
+    fireEvent.click(screen.getByRole('button', { name: 'Show attention panel' }));
     fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
     expect(events).toContainEqual({
       action: 'quick-action',

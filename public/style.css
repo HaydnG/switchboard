@@ -988,6 +988,7 @@ input:focus-visible {
   animation: loading-pulse 1.2s ease-in-out infinite;
 }
 
+#attention-panel-toggle,
 #star-toggle,
 #archive-toggle,
 #running-toggle,
@@ -1011,6 +1012,7 @@ input:focus-visible {
   justify-content: center;
 }
 
+#attention-panel-toggle:hover,
 #star-toggle:hover,
 #archive-toggle:hover,
 #running-toggle:hover,
@@ -1043,6 +1045,12 @@ input:focus-visible {
   background: rgba(80,180,255,0.1);
   border-color: rgba(80,180,255,0.25);
   color: #50b4ff;
+}
+
+#attention-panel-toggle.active {
+  background: rgba(230,184,93,0.12);
+  border-color: rgba(230,184,93,0.32);
+  color: #e6b85d;
 }
 
 /* ---- Search ---- */

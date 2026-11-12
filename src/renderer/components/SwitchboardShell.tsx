@@ -31,6 +31,9 @@ export function SwitchboardShell() {
   const [inspectorOpen, setInspectorOpen] = useState(() =>
     storedBoolean('reactInspectorOpen', true),
   );
+  const [attentionPanelOpen, setAttentionPanelOpen] = useState(() =>
+    storedBoolean('showAttentionPanel', false),
+  );
   const activeSession = useMemo(
     () => overview.sessions.find((session) => session.id === overview.activeSessionId) || null,
     [overview.activeSessionId, overview.sessions],
@@ -57,11 +60,17 @@ export function SwitchboardShell() {
     setInspectorOpen(next);
     persistBoolean('reactInspectorOpen', next);
   };
+  const toggleAttentionPanel = () => {
+    const next = !attentionPanelOpen;
+    setAttentionPanelOpen(next);
+    persistBoolean('showAttentionPanel', next);
+  };
 
   return (
     <>
       {createPortal(
         <AppSidebar
+          attentionPanelOpen={attentionPanelOpen}
           collapsed={navigationCollapsed}
           overview={overview}
           onToggleCollapsed={toggleNavigation}
@@ -71,8 +80,10 @@ export function SwitchboardShell() {
       {createPortal(
         <WorkspaceTopbar
           activeSession={activeSession}
+          attentionPanelOpen={attentionPanelOpen}
           inspectorOpen={inspectorOpen}
           overview={overview}
+          onToggleAttentionPanel={toggleAttentionPanel}
           onToggleInspector={toggleInspector}
         />,
         topbarSlot,

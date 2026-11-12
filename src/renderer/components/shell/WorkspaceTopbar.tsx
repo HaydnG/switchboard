@@ -8,15 +8,19 @@ import { shortProjectName } from '@renderer/components/shell/shell-utils';
 
 interface WorkspaceTopbarProps {
   activeSession: SessionOverviewItem | null;
+  attentionPanelOpen: boolean;
   inspectorOpen: boolean;
   overview: SessionOverviewSnapshot;
+  onToggleAttentionPanel: () => void;
   onToggleInspector: () => void;
 }
 
 export function WorkspaceTopbar({
   activeSession,
+  attentionPanelOpen,
   inspectorOpen,
   overview,
+  onToggleAttentionPanel,
   onToggleInspector,
 }: WorkspaceTopbarProps) {
   return (
@@ -58,6 +62,16 @@ export function WorkspaceTopbar({
             Back to session
           </Button>
         )}
+        <Button
+          aria-label={attentionPanelOpen ? 'Hide attention panel' : 'Show attention panel'}
+          aria-pressed={attentionPanelOpen}
+          icon={<Icon name="attention" />}
+          onClick={onToggleAttentionPanel}
+          size="sm"
+          variant={attentionPanelOpen ? 'secondary' : 'ghost'}
+        >
+          Attention
+        </Button>
         {overview.attention > 0 && (
           <Button
             icon={<Icon name="attention" />}

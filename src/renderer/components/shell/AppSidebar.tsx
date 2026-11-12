@@ -17,6 +17,7 @@ type SessionFilter = 'all' | 'archived' | 'attention' | 'running' | 'starred' | 
 type SidebarMode = 'groups' | 'projects';
 
 interface AppSidebarProps {
+  attentionPanelOpen: boolean;
   collapsed: boolean;
   overview: SessionOverviewSnapshot;
   onToggleCollapsed: () => void;
@@ -264,7 +265,7 @@ function AttentionInbox({
 }) {
   if (sessions.length === 0) return null;
   return (
-    <section className="sb-attention-inbox">
+    <section className="sb-attention-inbox" aria-label="Sessions needing attention">
       <header>
         <div>
           <span className="sb-attention-pulse" />
@@ -337,7 +338,12 @@ function AttentionInbox({
   );
 }
 
-export function AppSidebar({ collapsed, overview, onToggleCollapsed }: AppSidebarProps) {
+export function AppSidebar({
+  attentionPanelOpen,
+  collapsed,
+  overview,
+  onToggleCollapsed,
+}: AppSidebarProps) {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<SessionFilter>('all');
   const [mode, setMode] = useState<SidebarMode>(() =>
@@ -567,7 +573,7 @@ export function AppSidebar({ collapsed, overview, onToggleCollapsed }: AppSideba
       )}
 
       <div className="sb-sidebar-sessions" aria-label="Sessions">
-        {!collapsed && (
+        {!collapsed && attentionPanelOpen && (
           <AttentionInbox
             activeSessionId={overview.activeSessionId}
             onDragStart={setDraggedSessionId}

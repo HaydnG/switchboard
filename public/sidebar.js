@@ -385,6 +385,8 @@ function showSpringCleaningDialog() {
 }
 
 function buildAttentionInbox(projects) {
+  // Hidden until the toolbar toggle opts in. Missing flag stays off.
+  if (typeof showAttentionPanel === 'undefined' || !showAttentionPanel) return null;
   const items = getAttentionInboxItems(getAllRenderableSessions(projects), getSessionRuntimeState());
   if (items.length === 0) return null;
 
