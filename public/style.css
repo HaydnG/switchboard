@@ -1600,6 +1600,10 @@ input:focus-visible {
   display: inline-block;
   background: #3ecf5a;
   box-shadow: 0 0 6px rgba(62,207,90,0.5);
+}
+/* Pulse only while an agent is working: an idle live PTY must not keep an
+   animation (and with it full-rate compositing) running. */
+.slug-group-dot.running.busy {
   animation: pulse-dot 2s ease-in-out infinite;
 }
 .slug-group-count {
@@ -2918,13 +2922,16 @@ input:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.001ms !important;
-    animation-iteration-count: 1 !important;
-    scroll-behavior: auto !important;
-    transition-duration: 0.001ms !important;
+  /* Layered so it also overrides unlayered `animation: … !important` rules. */
+  @layer reduced-motion {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      scroll-behavior: auto !important;
+      transition-duration: 0.001ms !important;
+    }
   }
 }
 
@@ -5769,6 +5776,8 @@ input:focus-visible {
   display: inline-block;
   background: #3ecf5a;
   box-shadow: 0 0 6px rgba(62,207,90,0.5);
+}
+.user-group-status-dot.running.busy {
   animation: pulse-dot 2s ease-in-out infinite;
 }
 .user-group-count {

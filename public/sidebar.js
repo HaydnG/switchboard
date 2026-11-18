@@ -460,6 +460,7 @@ function buildUserGroup(group, sessions, bodyNode) {
 
   const counts = getStatusCounts(sessions, getSessionRuntimeState());
   const hasRunning = sessions.some(s => activePtyIds.has(s.sessionId));
+  const hasBusy = sessions.some(s => sessionBusyState.get(s.sessionId));
 
   const header = document.createElement('div');
   header.className = 'user-group-header';
@@ -486,7 +487,7 @@ function buildUserGroup(group, sessions, bodyNode) {
 
   const meta = document.createElement('div');
   meta.className = 'user-group-meta';
-  meta.innerHTML = `<span class="user-group-status-dot${hasRunning ? ' running' : ''}"></span><span class="user-group-count">${sessions.length} session${sessions.length === 1 ? '' : 's'}</span>`;
+  meta.innerHTML = `<span class="user-group-status-dot${hasRunning ? ' running' : ''}${hasBusy ? ' busy' : ''}"></span><span class="user-group-count">${sessions.length} session${sessions.length === 1 ? '' : 's'}</span>`;
 
   const chips = document.createElement('span');
   chips.className = 'user-group-chips';
@@ -596,10 +597,11 @@ function buildSlugGroup(slug, sessions) {
   nameEl.textContent = displayName;
 
   const hasRunning = sessions.some(s => activePtyIds.has(s.sessionId));
+  const hasBusy = sessions.some(s => sessionBusyState.get(s.sessionId));
 
   const meta = document.createElement('div');
   meta.className = 'slug-group-meta';
-  meta.innerHTML = `<span class="slug-group-dot${hasRunning ? ' running' : ''}"></span><span class="slug-group-count">${sessions.length} sessions</span> ${escapeHtml(timeStr)}`;
+  meta.innerHTML = `<span class="slug-group-dot${hasRunning ? ' running' : ''}${hasBusy ? ' busy' : ''}"></span><span class="slug-group-count">${sessions.length} sessions</span> ${escapeHtml(timeStr)}`;
 
   const archiveSlugBtn = document.createElement('button');
   archiveSlugBtn.className = 'slug-group-archive-btn';
