@@ -2928,6 +2928,18 @@ input:focus-visible {
   }
 }
 
+/* Any running animation, however small, keeps Chromium compositing the whole
+   window at the display refresh rate, so pause them all while the window is in
+   the background. The layer is what lets this beat unlayered
+   `animation: … !important` rules regardless of their specificity. */
+@layer window-inactive {
+  html.window-inactive *,
+  html.window-inactive *::before,
+  html.window-inactive *::after {
+    animation-play-state: paused !important;
+  }
+}
+
 /* Terminal container inside a grid card — fills middle space */
 .terminal-container.grid-mode {
   display: block !important;

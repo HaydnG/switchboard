@@ -923,10 +923,12 @@ function syncNativeNotifications() {
 
 function setWindowFocused(focused) {
   windowFocused = focused;
+  document.documentElement.classList.toggle('window-inactive', !focused);
   // Regaining focus may have cleared attended sessions; recompute the badge and
   // reset the transition baseline so we don't re-notify on the next change.
   syncNativeNotifications();
 }
+document.documentElement.classList.toggle('window-inactive', !windowFocused);
 window.addEventListener('focus', () => setWindowFocused(true));
 window.addEventListener('blur', () => setWindowFocused(false));
 document.addEventListener('visibilitychange', () => {
